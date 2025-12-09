@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BT Destek Asistanı - Context-Aware IT Support</title>
+    <link rel="stylesheet" href="/ui/styles.css">
+</head>
+<body>
+    <header>
+        <h1>🤖 BT Destek Asistanı</h1>
+        <p>Context-Aware IT Support Assistant with Hybrid RAG & Anomaly Detection</p>
+    </header>
+
+    <nav class="tabs">
+        <button class="tab-button active" data-tab="chat">💬 Chat (RAG)</button>
+        <button class="tab-button" data-tab="anomaly">📊 Anomali Tespiti</button>
+    </nav>
+
+    <main>
+        <!-- ========================================
+             CHAT PANEL (RAG-based QA)
+        ======================================== -->
+        <section id="chat-panel" class="panel active">
+            <div class="panel-header">
+                <h2>💬 Chat - Soru-Cevap</h2>
+                <p>ITSM ticket'larından yararlanarak sorularınıza cevap verir.</p>
+            </div>
+
+            <!-- Chat history container -->
+            <div id="chat-history-container" class="chat-history-container">
+                <div id="chat-messages" class="chat-messages">
+                    <!-- Messages will be appended here dynamically -->
+                </div>
+            </div>
+
+            <!-- Input area (fixed at bottom) -->
+            <div class="chat-input-area">
+                <div class="chat-input-wrapper">
+                    <textarea 
+                        id="query-input" 
+                        placeholder="Sorunuzu yazın... (Enter: gönder, Shift+Enter: yeni satır)"
+                        rows="2"
+                    ></textarea>
+                    
+                    <div class="chat-input-controls">
+                        <select id="language-select" class="language-select-inline">
+                            <option value="tr" selected>🇹🇷 TR</option>
+                            <option value="en">🇬🇧 EN</option>
+                        </select>
+                        
+                        <button id="chat-submit-btn" class="btn btn-primary btn-send">
+                            <span id="send-btn-text">🚀 Gönder</span>
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Loading indicator (inside input area) -->
+                <div id="chat-loading" class="chat-loading hidden">
+                    <span class="loading-dots">⏳ Yükleniyor</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================
+             ANOMALY PANEL (Statistics & Detection)
+        ======================================== -->
+        <section id="anomaly-panel" class="panel">
+            <div class="panel-header">
+                <h2>Anomali ve Drift Tespiti</h2>
+                <p>Ticket dağılımlarındaki anormal davranışları tespit eder.</p>
+            </div>
+
+            <div class="anomaly-controls">
+                <button id="load-stats-btn" class="btn btn-secondary">
+                    📊 İstatistikleri Yükle
+                </button>
+                <button id="load-events-btn" class="btn btn-secondary">
+                    🚨 Anomalileri Yükle
+                </button>
+            </div>
+
+            <!-- STATS SECTION -->
+            <div class="anomaly-subsection">
+                <h3>📈 Window Statistics & Drift Scores</h3>
+                
+                <div id="stats-loading" class="loading hidden">
+                    ⏳ İstatistikler yükleniyor...
+                </div>
+
+                <div id="stats-error" class="error hidden"></div>
+
+                <div id="stats-result" class="hidden">
+                    <div id="stats-summary" class="summary-box"></div>
+                    <div id="stats-table-container"></div>
+                </div>
+            </div>
+
+            <!-- EVENTS SECTION -->
+            <div class="anomaly-subsection">
+                <h3>🚨 Anomaly Events</h3>
+                
+                <div id="events-loading" class="loading hidden">
+                    ⏳ Anomaliler yükleniyor...
+                </div>
+
+                <div id="events-error" class="error hidden"></div>
+
+                <div id="events-result" class="hidden">
+                    <div id="events-summary" class="summary-box"></div>
+                    <div id="events-list"></div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>
+            🎓 Research Project: Context-Aware IT Support Assistant<br>
+            Hybrid RAG (BM25 + Embeddings) | Anomaly Detection (Volume + Category + Semantic Drift)
+        </p>
+    </footer>
+
+    <script src="/ui/app.js"></script>
+</body>
+</html>
+
+
