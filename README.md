@@ -144,6 +144,43 @@ python scripts/test_dynamic_weighting_demo.py
 python scripts/test_retrieval_with_dynamic.py
 ```
 
+## 🧪 Senaryo Testleri
+
+Aşağıdaki senaryolar test edilir:
+
+| Senaryo | Soru | Min Güven | Beklenen Anahtar Kelimeler |
+|----------|------|-----------|---------------------------|
+| **Outlook Şifre Sıfırlama** | "Outlook şifremi unuttum" | 0.4 | outlook, parola, şifre, sıfırlama |
+| **VPN Bağlantı Sorunu** | "VPN'e bağlanamıyorum" | 0.4 | vpn, bağlantı, ayar, istemci |
+| **Yazıcı Çalışmıyor** | "Yazıcı yazdırmıyor" | 0.3 | yazıcı, sürücü, bağlantı |
+| **Yavaş Laptop** | "Laptop çok yavaş" | 0.3 | performans, disk, güncelleme |
+| **Email Gönderemiyorum** | "Email gönderemiyorum" | 0.3 | email, mail, gönder, ayar |
+| **Disk Dolu Hatası** | "Disk alanı doldu" | 0.35 | disk, alan, temizlik, dosya |
+
+### Başarı Kriterleri
+
+Bir senaryo **geçer** eğer:
+1. **Güven** ≥ minimum eşik (senaryoya göre 0.3-0.4)
+2. **Anahtar Kelimeler** ≥ beklenen anahtar kelimelerin %50'si cevapta görünür (büyük/küçük harf duyarsız)
+3. **Kaynaklar** ≥ en az 1 kaynak döküman döndürülür
+
+### Yeni Senaryo Ekleme
+
+Özel senaryolar eklemek için `scripts/run_chat_scenarios.py` dosyasını düzenleyin:
+
+```python
+SCENARIOS.append(
+    ChatScenario(
+        name="Özel Senaryo",
+        question="Sorunuz burada",
+        expected_keywords=["anahtar1", "anahtar2", "anahtar3"],
+        min_confidence=0.4,
+    )
+)
+```
+
+Ardından script'i çalıştırarak sonuçları görün.
+
 ## 📝 Notlar
 
 - Server çalışırken terminali kapatmayın
@@ -160,51 +197,4 @@ python scripts/test_retrieval_with_dynamic.py
 
 ## 📄 Lisans
 
-<<<<<<< HEAD
 Bu proje TÜBİTAK destekli bir araştırma projesidir.
-=======
-The following scenarios are tested:
-
-| Scenario | Question | Min Confidence | Expected Keywords |
-|----------|----------|----------------|-------------------|
-| **Outlook Password Reset** | "Outlook şifremi unuttum" | 0.4 | outlook, parola, şifre, sıfırlama |
-| **VPN Connection Issue** | "VPN'e bağlanamıyorum" | 0.4 | vpn, bağlantı, ayar, istemci |
-| **Printer Not Working** | "Yazıcı yazdırmıyor" | 0.3 | yazıcı, sürücü, bağlantı |
-| **Slow Laptop** | "Laptop çok yavaş" | 0.3 | performans, disk, güncelleme |
-| **Cannot Send Email** | "Email gönderemiyorum" | 0.3 | email, mail, gönder, ayar |
-| **Disk Full Error** | "Disk alanı doldu" | 0.35 | disk, alan, temizlik, dosya |
-
-### Success Criteria
-
-A scenario **passes** if:
-1. **Confidence** ≥ minimum threshold (0.3-0.4 depending on scenario)
-2. **Keywords** ≥ 50% of expected keywords appear in answer (case-insensitive)
-3. **Sources** ≥ at least 1 source document returned
-
-### Adding New Scenarios
-
-To add custom scenarios, edit `scripts/run_chat_scenarios.py`:
-
-```python
-SCENARIOS.append(
-    ChatScenario(
-        name="Custom Scenario",
-        question="Your question here",
-        expected_keywords=["keyword1", "keyword2", "keyword3"],
-        min_confidence=0.4,
-    )
-)
-```
-
-Then run the script to see results.
-
----
-
-
-
-
-
-
-
-
->>>>>>> 680360d02896fa4cc28613547ed9f8b77c23b051
