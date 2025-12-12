@@ -160,4 +160,51 @@ python scripts/test_retrieval_with_dynamic.py
 
 ## 📄 Lisans
 
+<<<<<<< HEAD
 Bu proje TÜBİTAK destekli bir araştırma projesidir.
+=======
+The following scenarios are tested:
+
+| Scenario | Question | Min Confidence | Expected Keywords |
+|----------|----------|----------------|-------------------|
+| **Outlook Password Reset** | "Outlook şifremi unuttum" | 0.4 | outlook, parola, şifre, sıfırlama |
+| **VPN Connection Issue** | "VPN'e bağlanamıyorum" | 0.4 | vpn, bağlantı, ayar, istemci |
+| **Printer Not Working** | "Yazıcı yazdırmıyor" | 0.3 | yazıcı, sürücü, bağlantı |
+| **Slow Laptop** | "Laptop çok yavaş" | 0.3 | performans, disk, güncelleme |
+| **Cannot Send Email** | "Email gönderemiyorum" | 0.3 | email, mail, gönder, ayar |
+| **Disk Full Error** | "Disk alanı doldu" | 0.35 | disk, alan, temizlik, dosya |
+
+### Success Criteria
+
+A scenario **passes** if:
+1. **Confidence** ≥ minimum threshold (0.3-0.4 depending on scenario)
+2. **Keywords** ≥ 50% of expected keywords appear in answer (case-insensitive)
+3. **Sources** ≥ at least 1 source document returned
+
+### Adding New Scenarios
+
+To add custom scenarios, edit `scripts/run_chat_scenarios.py`:
+
+```python
+SCENARIOS.append(
+    ChatScenario(
+        name="Custom Scenario",
+        question="Your question here",
+        expected_keywords=["keyword1", "keyword2", "keyword3"],
+        min_confidence=0.4,
+    )
+)
+```
+
+Then run the script to see results.
+
+---
+
+
+
+
+
+
+
+
+>>>>>>> 680360d02896fa4cc28613547ed9f8b77c23b051
