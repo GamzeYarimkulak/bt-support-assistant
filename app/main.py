@@ -6,7 +6,12 @@ Serves the IT support assistant API endpoints.
 from dotenv import load_dotenv
 
 # Load .env file BEFORE importing settings (PHASE 8: Critical for OpenAI API key)
-load_dotenv()
+# Simple loading - if file has issues, it will be skipped
+try:
+    load_dotenv(encoding='utf-8')
+except:
+    # If encoding fails, just skip .env file (use defaults)
+    pass
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

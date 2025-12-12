@@ -144,6 +144,36 @@ function createMessageElement(message) {
                </div>`
             : '';
         
+        // Debug info HTML (retrieval details)
+        const debugHtml = message.debug_info
+            ? `<div class="message-debug-info">
+                 <div class="message-debug-title">🔍 Arama Detayları:</div>
+                 <div class="message-debug-content">
+                   <div class="debug-item">
+                     <span class="debug-label">Dinamik Alpha:</span>
+                     <span class="debug-value">${message.debug_info.alpha_used !== null && message.debug_info.alpha_used !== undefined ? message.debug_info.alpha_used.toFixed(2) : 'N/A'}</span>
+                     <span class="debug-hint">${message.debug_info.alpha_used < 0.4 ? '(Embedding ağırlıklı)' : message.debug_info.alpha_used > 0.6 ? '(BM25 ağırlıklı)' : '(Dengeli)'}</span>
+                   </div>
+                   <div class="debug-item">
+                     <span class="debug-label">Sorgu Tipi:</span>
+                     <span class="debug-value">${message.debug_info.query_type || 'N/A'}</span>
+                   </div>
+                   <div class="debug-item">
+                     <span class="debug-label">BM25 Sonuçları:</span>
+                     <span class="debug-value">${message.debug_info.bm25_results_count || 0}</span>
+                   </div>
+                   <div class="debug-item">
+                     <span class="debug-label">Embedding Sonuçları:</span>
+                     <span class="debug-value">${message.debug_info.embedding_results_count || 0}</span>
+                   </div>
+                   <div class="debug-item">
+                     <span class="debug-label">Hibrit Sonuçlar:</span>
+                     <span class="debug-value">${message.debug_info.hybrid_results_count || 0}</span>
+                   </div>
+                 </div>
+               </div>`
+            : '';
+        
         messageDiv.innerHTML = `
             <div class="message-bubble">
                 <div class="message-content">${formatAssistantMessage(message.text)}</div>
@@ -153,6 +183,7 @@ function createMessageElement(message) {
                     ${languageBadge}
                 </div>
                 ${sourcesHtml}
+                ${debugHtml}
                 <div class="message-timestamp">${formatTimestamp(message.timestamp)}</div>
             </div>
         `;
@@ -432,7 +463,8 @@ async function submitChatQuery() {
             confidence: data.confidence,
             has_answer: data.has_answer,
             language: data.language,
-            sources: data.sources || []
+            sources: data.sources || [],
+            debug_info: data.debug_info || null  // Include debug info
         };
         chatMessages.push(assistantMessage);
         renderChatMessages();

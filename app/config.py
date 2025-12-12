@@ -68,12 +68,14 @@ class Settings(BaseSettings):
     
     class Config:
         env_file = ".env"
-        env_file_encoding = "utf-8"
+        # Try multiple encodings - Pydantic doesn't support fallback, so we'll handle it manually
+        env_file_encoding = "utf-8"  # Default, but will fail if file is not UTF-8
         case_sensitive = False
         extra = "ignore"  # Ignore extra fields from .env
 
 
 # Global settings instance
+# Simple initialization - if .env has encoding issues, it will use defaults
 settings = Settings()
 
 

@@ -6,11 +6,19 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 import structlog
 import os
-from openai import OpenAI
+
+# OpenAI import - only needed if using real LLM
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    OpenAI = None  # Placeholder
 
 from core.retrieval.hybrid_retriever import HybridRetriever
 from core.rag.prompts import PromptBuilder
 from core.rag.confidence import ConfidenceEstimator
+from core.nlp.it_relevance import ITRelevanceChecker
 
 logger = structlog.get_logger()
 
@@ -26,6 +34,7 @@ class RAGResult:
     - Source documents used
     - Whether a reliable answer was generated
     - Optional language and intent information
+    - Optional debug information about retrieval process
     """
     answer: str
     confidence: float
@@ -34,6 +43,7 @@ class RAGResult:
     language: Optional[str] = None
     intent: Optional[str] = None
     retrieved_docs: List[Dict[str, Any]] = field(default_factory=list)
+    debug_info: Optional[Dict[str, Any]] = None  # Debug info: alpha_used, query_type, etc.
 
 
 # ============================================================================
@@ -73,6 +83,12 @@ def generate_answer_with_llm(
     Returns:
         Advisory-style answer in the requested language
     """
+    # Check if OpenAI package is available
+    if not OPENAI_AVAILABLE:
+        logger.warning("openai_package_not_installed_using_stub",
+                      message="openai package not installed, falling back to stub")
+        return generate_answer_with_stub(question, docs, language)
+    
     if not api_key:
         logger.warning("no_api_key_using_stub", 
                       api_key_provided=api_key is not None,
@@ -574,6 +590,9 @@ class RAGPipeline:
         self.llm_temperature = llm_temperature
         self.llm_max_tokens = llm_max_tokens
         
+        # IT relevance checker for filtering non-IT queries
+        self.it_relevance_checker = ITRelevanceChecker()
+        
         logger.info("rag_pipeline_initialized",
                    max_context_length=max_context_length,
                    confidence_threshold=confidence_threshold,
@@ -626,12 +645,53 @@ class RAGPipeline:
         if language is None:
             language = self._detect_language(question)
         
+        # Step 0: Check if query is IT-related (filter non-IT queries)
+        if self.it_relevance_checker.should_reject_query(question):
+            logger.info("query_rejected_non_it", question=question[:100])
+            if language == "tr":
+                answer = "Üzgünüm, bu soru BT (Bilgi Teknolojileri) destek konularıyla ilgili değil. Lütfen bilgisayar, yazılım, ağ, güvenlik veya diğer BT konularıyla ilgili sorularınızı sorun."
+            else:
+                answer = "I'm sorry, this question is not related to IT (Information Technology) support topics. Please ask questions about computers, software, networks, security, or other IT-related topics."
+            
+            return RAGResult(
+                answer=answer,
+                confidence=0.0,
+                sources=[],
+                has_answer=False,
+                language=language,
+                intent=None,
+                retrieved_docs=[],
+                debug_info={"rejection_reason": "non_it_query"}
+            )
+        
         # Step 1: Retrieve relevant documents
         retrieved_docs = self.retriever.search(question, top_k=top_k)
         
+        # Collect debug info from retrieval
+        debug_info = {}
+        if retrieved_docs:
+            # Get alpha_used from first result (all should have same alpha)
+            first_doc = retrieved_docs[0]
+            debug_info["alpha_used"] = first_doc.get("alpha_used")
+            
+            # Get actual source counts from metadata (added by hybrid retriever)
+            debug_info["bm25_results_count"] = first_doc.get("_bm25_source_count", 0)
+            debug_info["embedding_results_count"] = first_doc.get("_embedding_source_count", 0)
+            debug_info["hybrid_results_count"] = len(retrieved_docs)
+            
+            # Determine query type based on alpha
+            alpha = debug_info.get("alpha_used", 0.5)
+            if alpha < 0.4:
+                debug_info["query_type"] = "short_technical"  # Embedding favored
+            elif alpha < 0.6:
+                debug_info["query_type"] = "medium"  # Balanced
+            else:
+                debug_info["query_type"] = "long_detailed"  # BM25 favored
+        
         logger.debug("retrieval_completed", 
                     num_docs=len(retrieved_docs),
-                    question=question[:50])
+                    question=question[:50],
+                    debug_info=debug_info)
         
         # Step 2: Check if we have any documents
         if not retrieved_docs:
@@ -712,7 +772,8 @@ class RAGPipeline:
             has_answer=True,
             language=language,
             intent=None,  # Can be populated by NLP module if needed
-            retrieved_docs=retrieved_docs
+            retrieved_docs=retrieved_docs,
+            debug_info=debug_info  # Include debug info
         )
         
         logger.info("rag_answer_success",
@@ -764,6 +825,18 @@ class RAGPipeline:
         
         sources = self._extract_sources(retrieved_docs) if retrieved_docs else []
         
+        # Collect debug info if we have retrieved docs
+        debug_info = None
+        if retrieved_docs:
+            first_doc = retrieved_docs[0]
+            debug_info = {
+                "alpha_used": first_doc.get("alpha_used"),
+                "bm25_results_count": first_doc.get("_bm25_source_count", 0),
+                "embedding_results_count": first_doc.get("_embedding_source_count", 0),
+                "hybrid_results_count": len(retrieved_docs),
+                "query_type": None  # Not determined for no-answer cases
+            }
+        
         logger.debug("no_answer_result_built", 
                     reason=reason,
                     num_sources=len(sources))
@@ -775,7 +848,8 @@ class RAGPipeline:
             has_answer=False,
             language=language,
             intent=None,
-            retrieved_docs=retrieved_docs or []
+            retrieved_docs=retrieved_docs or [],
+            debug_info=debug_info
         )
     
     def _extract_sources(self, docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

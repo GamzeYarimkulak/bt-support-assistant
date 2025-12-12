@@ -8,6 +8,7 @@ import structlog
 
 from core.retrieval.bm25_retriever import BM25Retriever
 from core.retrieval.embedding_retriever import EmbeddingRetriever
+from core.retrieval.dynamic_weighting import DynamicWeightComputer
 
 logger = structlog.get_logger()
 
@@ -22,7 +23,8 @@ class HybridRetriever:
         self,
         bm25_retriever: BM25Retriever,
         embedding_retriever: EmbeddingRetriever,
-        alpha: float = 0.5
+        alpha: float = 0.5,
+        use_dynamic_weighting: bool = True
     ):
         """
         Initialize hybrid retriever.
@@ -30,14 +32,25 @@ class HybridRetriever:
         Args:
             bm25_retriever: BM25 retriever instance
             embedding_retriever: Embedding retriever instance
-            alpha: Weight for BM25 scores (1-alpha for embedding scores)
+            alpha: Default weight for BM25 scores (1-alpha for embedding scores)
                   alpha=1.0 means BM25 only, alpha=0.0 means embeddings only
+                  Only used if use_dynamic_weighting=False
+            use_dynamic_weighting: If True, compute alpha dynamically based on query
         """
         self.bm25_retriever = bm25_retriever
         self.embedding_retriever = embedding_retriever
-        self.alpha = alpha
+        self.alpha = alpha  # Default/fallback alpha
+        self.use_dynamic_weighting = use_dynamic_weighting
         
-        logger.info("hybrid_retriever_initialized", alpha=alpha)
+        # Initialize dynamic weight computer if enabled
+        if use_dynamic_weighting:
+            self.weight_computer = DynamicWeightComputer()
+        else:
+            self.weight_computer = None
+        
+        logger.info("hybrid_retriever_initialized", 
+                   alpha=alpha,
+                   use_dynamic_weighting=use_dynamic_weighting)
     
     def search(
         self, 
@@ -65,6 +78,16 @@ class HybridRetriever:
             4. Combine scores using weighted sum
             5. Re-rank and return top-k
         """
+        # Compute dynamic alpha if enabled
+        if self.use_dynamic_weighting and self.weight_computer:
+            query_alpha = self.weight_computer.compute_alpha(query)
+            logger.debug("dynamic_alpha_computed",
+                        query=query[:50],
+                        computed_alpha=query_alpha,
+                        default_alpha=self.alpha)
+        else:
+            query_alpha = self.alpha
+        
         # Retrieve from both methods
         bm25_results = self.bm25_retriever.search(query, top_k=bm25_k)
         embedding_results = self.embedding_retriever.search(query, top_k=embedding_k)
@@ -96,14 +119,16 @@ class HybridRetriever:
             bm25_score = bm25_scores_norm.get(doc_id, 0.0)
             embedding_score = embedding_scores_norm.get(doc_id, 0.0)
             
-            # Weighted combination
-            hybrid_score = self.alpha * bm25_score + (1 - self.alpha) * embedding_score
+            # Weighted combination (use query-specific alpha if dynamic weighting is enabled)
+            current_alpha = query_alpha if self.use_dynamic_weighting else self.alpha
+            hybrid_score = current_alpha * bm25_score + (1 - current_alpha) * embedding_score
             
             result = doc.copy()
             result["score"] = hybrid_score
             result["bm25_score"] = bm25_score
             result["embedding_score"] = embedding_score
             result["retrieval_method"] = "hybrid"
+            result["alpha_used"] = current_alpha if self.use_dynamic_weighting else self.alpha
             
             hybrid_results.append(result)
         
@@ -115,7 +140,13 @@ class HybridRetriever:
                     query=query,
                     num_bm25=len(bm25_results),
                     num_embedding=len(embedding_results),
-                    num_hybrid=len(final_results))
+                    num_hybrid=len(final_results),
+                    alpha_used=query_alpha if self.use_dynamic_weighting else self.alpha)
+        
+        # Add metadata about source counts for debug info
+        for result in final_results:
+            result["_bm25_source_count"] = len(bm25_results)
+            result["_embedding_source_count"] = len(embedding_results)
         
         return final_results
     

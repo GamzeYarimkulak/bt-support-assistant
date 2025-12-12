@@ -31,6 +31,9 @@ scipy>=1.11.0,<2.0.0
 python-dotenv>=1.0.0
 pyyaml>=6.0
 
+# OpenAI (optional - only needed if USE_REAL_LLM=true)
+openai>=1.0.0
+
 # Database & Storage
 elasticsearch>=8.11.0,<9.0.0
 

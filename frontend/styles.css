@@ -340,6 +340,60 @@ main {
     margin-left: 6px;
 }
 
+/* ============================================
+   DEBUG INFO (Retrieval Details)
+   ============================================ */
+
+.message-debug-info {
+    margin-top: 15px;
+    padding: 12px;
+    background: #f8f9fa;
+    border-left: 3px solid #667eea;
+    border-radius: 6px;
+    font-size: 0.9em;
+}
+
+.message-debug-title {
+    font-weight: 600;
+    color: #667eea;
+    margin-bottom: 10px;
+    font-size: 0.95em;
+}
+
+.message-debug-content {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.debug-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.debug-label {
+    font-weight: 500;
+    color: #666;
+    min-width: 120px;
+}
+
+.debug-value {
+    font-weight: 600;
+    color: #333;
+    background: white;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+}
+
+.debug-hint {
+    font-size: 0.85em;
+    color: #999;
+    font-style: italic;
+}
+
 /* Error message */
 .message.error .message-bubble {
     background: #fed7d7;

@@ -43,6 +43,15 @@ class Source(BaseModel):
     relevance_score: float
 
 
+class RetrievalDebugInfo(BaseModel):
+    """Debug information about retrieval process."""
+    alpha_used: Optional[float] = None
+    bm25_results_count: Optional[int] = None
+    embedding_results_count: Optional[int] = None
+    hybrid_results_count: Optional[int] = None
+    query_type: Optional[str] = None  # "short", "medium", "long", "technical"
+
+
 class ChatResponse(BaseModel):
     """Chat response with answer and sources."""
     answer: str
@@ -52,6 +61,7 @@ class ChatResponse(BaseModel):
     intent: Optional[str] = None
     language: str
     timestamp: datetime
+    debug_info: Optional[RetrievalDebugInfo] = None  # Debug info for retrieval process
 
 
 def get_conversation_history(session_id: str) -> List[Dict[str, Any]]:
@@ -131,11 +141,12 @@ def get_rag_pipeline() -> RAGPipeline:
             print(f"[ERROR] {error_msg}: bm25={bm25_retriever is not None}, embedding={embedding_retriever is not None}")
             raise HTTPException(status_code=503, detail=error_msg)
         
-        # Create hybrid retriever
+        # Create hybrid retriever with dynamic weighting enabled
         hybrid_retriever = HybridRetriever(
             bm25_retriever=bm25_retriever,
             embedding_retriever=embedding_retriever,
-            alpha=0.5  # Equal weight for BM25 and embeddings
+            alpha=0.5,  # Default/fallback alpha
+            use_dynamic_weighting=True  # Enable dynamic alpha computation based on query
         )
         
         # Create RAG pipeline (PHASE 8: with real LLM support)
@@ -230,6 +241,17 @@ async def chat(request: ChatRequest) -> ChatResponse:
             for src in rag_result.sources
         ]
         
+        # Build debug info
+        debug_info = None
+        if rag_result.debug_info:
+            debug_info = RetrievalDebugInfo(
+                alpha_used=rag_result.debug_info.get("alpha_used"),
+                bm25_results_count=rag_result.debug_info.get("bm25_results_count"),
+                embedding_results_count=rag_result.debug_info.get("embedding_results_count"),
+                hybrid_results_count=rag_result.debug_info.get("hybrid_results_count"),
+                query_type=rag_result.debug_info.get("query_type")
+            )
+        
         # Build response
         response = ChatResponse(
             answer=rag_result.answer,
@@ -238,7 +260,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
             has_answer=rag_result.has_answer,
             intent=rag_result.intent,
             language=rag_result.language or "tr",
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
+            debug_info=debug_info
         )
         
         try:

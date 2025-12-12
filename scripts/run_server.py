@@ -11,7 +11,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 
 # Load .env file BEFORE importing settings (PHASE 8)
-load_dotenv()
+# Simple loading - if file has issues, it will be skipped
+try:
+    load_dotenv(encoding='utf-8')
+except:
+    # If encoding fails, just skip .env file (use defaults)
+    pass
 
 import uvicorn
 from app.config import settings
