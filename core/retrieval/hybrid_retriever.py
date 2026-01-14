@@ -12,6 +12,16 @@ from core.retrieval.dynamic_weighting import DynamicWeightComputer
 
 logger = structlog.get_logger()
 
+# Import settings for KB boost feature flag
+try:
+    from app.config import settings
+    KB_BOOST_ENABLED = getattr(settings, 'kb_boost_enabled', True)
+    KB_BOOST_FACTOR = getattr(settings, 'kb_boost_factor', 1.15)
+except ImportError:
+    # Fallback if settings not available
+    KB_BOOST_ENABLED = True
+    KB_BOOST_FACTOR = 1.15
+
 
 class HybridRetriever:
     """
@@ -24,7 +34,9 @@ class HybridRetriever:
         bm25_retriever: BM25Retriever,
         embedding_retriever: EmbeddingRetriever,
         alpha: float = 0.5,
-        use_dynamic_weighting: bool = True
+        use_dynamic_weighting: bool = True,
+        kb_boost_enabled: bool = None,
+        kb_boost_factor: float = None
     ):
         """
         Initialize hybrid retriever.
@@ -36,11 +48,17 @@ class HybridRetriever:
                   alpha=1.0 means BM25 only, alpha=0.0 means embeddings only
                   Only used if use_dynamic_weighting=False
             use_dynamic_weighting: If True, compute alpha dynamically based on query
+            kb_boost_enabled: Enable KB document boosting (default: from settings)
+            kb_boost_factor: Boost factor for KB documents (default: from settings)
         """
         self.bm25_retriever = bm25_retriever
         self.embedding_retriever = embedding_retriever
         self.alpha = alpha  # Default/fallback alpha
         self.use_dynamic_weighting = use_dynamic_weighting
+        
+        # KB boost settings (use provided values or fallback to global settings)
+        self.kb_boost_enabled = kb_boost_enabled if kb_boost_enabled is not None else KB_BOOST_ENABLED
+        self.kb_boost_factor = kb_boost_factor if kb_boost_factor is not None else KB_BOOST_FACTOR
         
         # Initialize dynamic weight computer if enabled
         if use_dynamic_weighting:
@@ -50,7 +68,9 @@ class HybridRetriever:
         
         logger.info("hybrid_retriever_initialized", 
                    alpha=alpha,
-                   use_dynamic_weighting=use_dynamic_weighting)
+                   use_dynamic_weighting=use_dynamic_weighting,
+                   kb_boost_enabled=self.kb_boost_enabled,
+                   kb_boost_factor=self.kb_boost_factor)
     
     def search(
         self, 
@@ -123,6 +143,17 @@ class HybridRetriever:
             current_alpha = query_alpha if self.use_dynamic_weighting else self.alpha
             hybrid_score = current_alpha * bm25_score + (1 - current_alpha) * embedding_score
             
+            # Apply KB boost if enabled (after fusion, before reranking)
+            if self.kb_boost_enabled:
+                doc_type = doc.get("doc_type", "").lower()
+                if doc_type in ["kb", "document"]:
+                    hybrid_score = hybrid_score * self.kb_boost_factor
+                    logger.debug("kb_boost_applied",
+                               doc_id=doc_id[:50],
+                               original_score=hybrid_score / self.kb_boost_factor,
+                               boosted_score=hybrid_score,
+                               boost_factor=self.kb_boost_factor)
+            
             result = doc.copy()
             result["score"] = hybrid_score
             result["bm25_score"] = bm25_score
@@ -132,7 +163,7 @@ class HybridRetriever:
             
             hybrid_results.append(result)
         
-        # Sort by hybrid score and return top-k
+        # Sort by hybrid score (KB boosted scores will rank higher) and return top-k
         hybrid_results.sort(key=lambda x: x["score"], reverse=True)
         final_results = hybrid_results[:top_k]
         

@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Any
 from datetime import datetime, timedelta
 import structlog
+import os
 
 from app.config import settings
 from core.anomaly.engine import (
@@ -25,6 +26,7 @@ from core.anomaly.engine import (
 from data_pipeline.ingestion import load_itsm_tickets_from_csv
 from data_pipeline.anonymize import DataAnonymizer
 from data_pipeline.build_indexes import IndexBuilder
+import pandas as pd
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -77,8 +79,80 @@ class AnomalyDetectResponse(BaseModel):
 # HELPER FUNCTIONS
 # ============================================
 
+def _load_chat_logs_for_anomaly(chat_logs_path: str) -> List[AnomalyTicket]:
+    """
+    Load chat logs (chat_tickets.csv) and convert to AnomalyTicket format.
+    
+    Args:
+        chat_logs_path: Path to chat_tickets.csv
+        
+    Returns:
+        List of AnomalyTicket objects
+    """
+    import pandas as pd
+    
+    if not os.path.exists(chat_logs_path):
+        return []
+    
+    # Load chat tickets CSV
+    df = pd.read_csv(chat_logs_path)
+    
+    if len(df) == 0:
+        return []
+    
+    # Load embedding model
+    embedding_retriever = None
+    try:
+        index_builder = IndexBuilder(index_dir="indexes/")
+        embedding_retriever = index_builder.load_embedding_index()
+    except Exception as e:
+        logger.warning("failed_to_load_embeddings_for_chat_logs", error=str(e))
+    
+    # Convert to AnomalyTicket format
+    anomaly_tickets = []
+    
+    for _, row in df.iterrows():
+        # Get embedding
+        embedding = None
+        if embedding_retriever:
+            try:
+                text = f"{row.get('short_description', '')} {row.get('description', '')}"
+                text = text.strip()
+                
+                if text:
+                    embedding_result = embedding_retriever.model.encode([text])[0]
+                    embedding = embedding_result
+            except Exception as e:
+                logger.debug("failed_to_embed_chat_ticket", ticket_id=row.get('ticket_id'), error=str(e))
+        
+        # Parse created_at
+        created_at = datetime.now()
+        try:
+            if pd.notna(row.get('created_at')):
+                created_at = pd.to_datetime(row['created_at']).to_pydatetime()
+        except:
+            pass
+        
+        anomaly_ticket = AnomalyTicket(
+            ticket_id=row.get('ticket_id', 'unknown'),
+            created_at=created_at,
+            category=row.get('category', 'General'),
+            subcategory=row.get('subcategory', ''),
+            priority=row.get('priority', 'Medium'),
+            embedding=embedding,
+        )
+        
+        anomaly_tickets.append(anomaly_ticket)
+    
+    logger.info("chat_logs_loaded_for_anomaly", 
+                path=chat_logs_path,
+                num_tickets=len(anomaly_tickets))
+    
+    return anomaly_tickets
+
+
 def _load_tickets_for_anomaly_analysis(
-    csv_path: str = "data/sample_itsm_tickets.csv",
+    csv_path: str = "data/raw/tickets/sample_itsm_tickets.csv",
     anonymize: bool = True,
 ) -> List[AnomalyTicket]:
     """
@@ -123,7 +197,8 @@ def _load_tickets_for_anomaly_analysis(
         if embedding_retriever:
             try:
                 # Combine text fields for embedding
-                text = f"{ticket.get('short_description', '')} {ticket.get('resolution', '')}"
+                # ITSMTicket is a Pydantic model, access attributes directly
+                text = f"{ticket.short_description or ''} {ticket.resolution or ''}"
                 text = text.strip()
                 
                 if text:
@@ -131,14 +206,14 @@ def _load_tickets_for_anomaly_analysis(
                     embedding_result = embedding_retriever.model.encode([text])[0]
                     embedding = embedding_result
             except Exception as e:
-                logger.debug("failed_to_embed_ticket", ticket_id=ticket.get('ticket_id'), error=str(e))
+                logger.debug("failed_to_embed_ticket", ticket_id=ticket.ticket_id, error=str(e))
         
         anomaly_ticket = AnomalyTicket(
-            ticket_id=ticket.get('ticket_id', 'unknown'),
-            created_at=ticket.get('created_at', datetime.now()),
-            category=ticket.get('category'),
-            subcategory=ticket.get('subcategory'),
-            priority=ticket.get('priority'),
+            ticket_id=ticket.ticket_id or 'unknown',
+            created_at=ticket.created_at or datetime.now(),
+            category=ticket.category,
+            subcategory=ticket.subcategory,
+            priority=ticket.priority,
             embedding=embedding,
         )
         
@@ -148,7 +223,7 @@ def _load_tickets_for_anomaly_analysis(
 
 
 def _run_anomaly_analysis_cached(
-    csv_path: str = "data/sample_itsm_tickets.csv",
+    csv_path: str = "data/raw/tickets/sample_itsm_tickets.csv",
     window_size_days: int = 1,
 ) -> tuple[List[WindowStats], List[AnomalyEvent]]:
     """
@@ -209,6 +284,10 @@ def _run_anomaly_analysis_cached(
 @router.get("/stats", response_model=AnomalyStatsResponse)
 async def get_anomaly_stats(
     days: int = Query(default=7, ge=1, le=30, description="Number of days to analyze"),
+    use_chat_logs: bool = Query(
+        default=False,
+        description="Use chat logs (chat_tickets.csv) instead of sample_itsm_tickets.csv"
+    ),
 ) -> AnomalyStatsResponse:
     """
     Get anomaly statistics and drift metrics for recent time windows.
@@ -231,13 +310,39 @@ async def get_anomaly_stats(
         GET /api/v1/anomaly/stats?days=7
     """
     try:
-        logger.info("anomaly_stats_requested", days=days)
+        logger.info("anomaly_stats_requested", days=days, use_chat_logs=use_chat_logs)
         
-        # Run analysis
-        stats, events = _run_anomaly_analysis_cached(
-            csv_path="data/sample_itsm_tickets.csv",
-            window_size_days=1,
-        )
+        # Determine data source
+        if use_chat_logs:
+            # Use chat logs for anomaly detection
+            chat_logs_path = os.path.join(settings.chat_logs_dir, "chat_tickets.csv")
+            if not os.path.exists(chat_logs_path):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Chat logs not found: {chat_logs_path}. Start using the chat interface to generate logs."
+                )
+            
+            # Load chat logs and run analysis
+            tickets = _load_chat_logs_for_anomaly(chat_logs_path)
+            if not tickets:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No chat tickets found. Start using the chat interface to generate logs."
+                )
+            
+            # Run analysis on chat logs
+            window_size = timedelta(days=1)
+            stats, events = analyze_ticket_stream(
+                tickets=tickets,
+                window_size=window_size,
+                min_baseline_windows=3,
+            )
+        else:
+            # Use default CSV
+            stats, events = _run_anomaly_analysis_cached(
+                csv_path="data/raw/tickets/sample_itsm_tickets.csv",
+                window_size_days=1,
+            )
         
         # Convert to response format
         window_responses = [
@@ -289,6 +394,10 @@ async def detect_anomalies(
         regex="^(info|warning|critical)$",
         description="Minimum severity to include"
     ),
+    use_chat_logs: bool = Query(
+        default=False,
+        description="Use chat logs (chat_tickets.csv) instead of sample_itsm_tickets.csv"
+    ),
 ) -> AnomalyDetectResponse:
     """
     Detect anomaly events in recent ticket streams.
@@ -312,13 +421,39 @@ async def detect_anomalies(
         GET /api/v1/anomaly/detect?min_severity=warning
     """
     try:
-        logger.info("anomaly_detect_requested", min_severity=min_severity)
+        logger.info("anomaly_detect_requested", min_severity=min_severity, use_chat_logs=use_chat_logs)
         
-        # Run analysis
-        stats, events = _run_anomaly_analysis_cached(
-            csv_path="data/sample_itsm_tickets.csv",
-            window_size_days=1,
-        )
+        # Determine data source
+        if use_chat_logs:
+            # Use chat logs for anomaly detection
+            chat_logs_path = os.path.join(settings.chat_logs_dir, "chat_tickets.csv")
+            if not os.path.exists(chat_logs_path):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Chat logs not found: {chat_logs_path}. Start using the chat interface to generate logs."
+                )
+            
+            # Load chat logs and run analysis
+            tickets = _load_chat_logs_for_anomaly(chat_logs_path)
+            if not tickets:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No chat tickets found. Start using the chat interface to generate logs."
+                )
+            
+            # Run analysis on chat logs
+            window_size = timedelta(days=1)
+            stats, events = analyze_ticket_stream(
+                tickets=tickets,
+                window_size=window_size,
+                min_baseline_windows=3,
+            )
+        else:
+            # Use default CSV
+            stats, events = _run_anomaly_analysis_cached(
+                csv_path="data/raw/tickets/sample_itsm_tickets.csv",
+                window_size_days=1,
+            )
         
         # Filter by severity
         severity_order = {"info": 0, "warning": 1, "critical": 2}

@@ -97,6 +97,14 @@ class ConfidenceEstimator:
         base_confidence = sum(confidence_signals) / len(confidence_signals)
         final_confidence = max(0.0, base_confidence - speculation_penalty)
         
+        # If retrieval quality is high (>0.7), boost confidence
+        # This helps when we have good sources but context overlap is low
+        if retrieval_quality > 0.7:
+            final_confidence = min(1.0, final_confidence + 0.1)
+            logger.debug("confidence_boosted_by_high_retrieval_quality",
+                        retrieval_quality=retrieval_quality,
+                        boosted_confidence=final_confidence)
+        
         has_answer = final_confidence >= self.confidence_threshold
         
         logger.debug("confidence_estimated",
@@ -143,6 +151,9 @@ class ConfidenceEstimator:
         """
         Compute quality score from retrieval scores.
         
+        IMPORTANT: This enforces "no source, no answer" policy.
+        If top retrieval score is too low, it means no relevant source was found.
+        
         Args:
             scores: List of retrieval scores
             
@@ -156,8 +167,24 @@ class ConfidenceEstimator:
         top_score = max(scores)
         top_3_avg = sum(sorted(scores, reverse=True)[:3]) / min(3, len(scores))
         
-        # Weighted combination
-        quality = 0.6 * top_score + 0.4 * top_3_avg
+        # STRICT POLICY: If top score is very low (<0.2), no relevant source found
+        # This enforces "kaynak yoksa cevap yok" principle
+        # But we relaxed from 0.3 to 0.2 to allow more answers when sources exist
+        if top_score < 0.2:
+            logger.debug("retrieval_quality_too_low", 
+                        top_score=top_score,
+                        reason="no_relevant_source_found")
+            return 0.0  # No relevant source = no answer
+        
+        # If top score is high (>0.5), boost the quality score
+        if top_score > 0.5:
+            # High relevance - boost quality
+            quality = 0.8 * top_score + 0.2 * top_3_avg
+            # Add bonus for high top score
+            quality = min(1.0, quality + 0.1)
+        else:
+            # Normal weighted combination
+            quality = 0.7 * top_score + 0.3 * top_3_avg
         
         return min(1.0, quality)
     
@@ -178,29 +205,40 @@ class ConfidenceEstimator:
         # Extract answer tokens
         answer_tokens = set(answer.lower().split())
         
-        # Remove very common words
-        stop_words = {"the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "is", "are"}
+        # Remove very common words (Turkish and English)
+        stop_words = {
+            "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "is", "are",
+            "ve", "ile", "için", "veya", "ama", "ancak", "bir", "bu", "şu", "o", "de", "da", "ki", "mi", "mı"
+        }
         answer_tokens = answer_tokens - stop_words
         
         if not answer_tokens:
-            return 0.5  # Neutral score for very short answers
+            return 0.3  # Low score for very short answers (might be uncertain)
         
         # Compute overlap with documents
         context_tokens = set()
         for doc in documents:
-            text = doc.get("text", "")
+            text = doc.get("text", "") or doc.get("resolution", "") or doc.get("short_description", "")
             context_tokens.update(text.lower().split())
         
         context_tokens = context_tokens - stop_words
         
         if not context_tokens:
-            return 0.0
+            return 0.0  # No context = no overlap
         
         # Jaccard similarity
         intersection = len(answer_tokens & context_tokens)
         union = len(answer_tokens | context_tokens)
         
         overlap = intersection / union if union > 0 else 0.0
+        
+        # RELAXED POLICY: If overlap is very low (<0.05), answer might not be based on sources
+        # But we don't completely reject - just give low score
+        if overlap < 0.05:
+            logger.debug("context_overlap_very_low",
+                        overlap=overlap,
+                        reason="answer_might_not_be_fully_based_on_sources")
+            return overlap * 0.5  # Penalize but don't completely reject
         
         return overlap
     

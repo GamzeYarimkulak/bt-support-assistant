@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 import structlog
 import os
+import re
 
 # OpenAI import - only needed if using real LLM
 try:
@@ -218,10 +219,17 @@ def _build_system_prompt(language: str) -> str:
 7. Sonunda: "Bu adımları kendiniz deneyebilir veya BT ekibinden destek isteyebilirsiniz."
 
 **TAKİP SORULARI:**
-- Eğer kullanıcı belirsiz bir takip sorusu sorarsa (örn: "nereden resetleyebilirim?"):
+- Eğer kullanıcı belirsiz bir takip sorusu sorarsa (örn: "nereden resetleyebilirim?", "diğer adımlarda ne yapacaktım"):
   1. Önceki konuşma geçmişine bakarak TAHMİN ET
   2. En olası çözümü sun
   3. Alternatif ihtimalleri de GÖSTER (örn: "VPN resetinden mi bahsediyorsunuz? Yoksa şifre sıfırlama mı?")
+  4. Eğer kullanıcı "diğer adımlar" veya "sonraki adımlar" diye sorarsa, önceki mesajlarda verdiğiniz adımları hatırlatın
+
+**TEŞEKKÜR MESAJLARI:**
+- Eğer kullanıcı "tamamdır", "teşekkür ederim", "tamam teşekkür" gibi mesajlar gönderirse:
+  1. Kısa ve nazik bir yanıt verin (örn: "Rica ederim, başka bir konuda yardımcı olabilir miyim?")
+  2. Önceki konuşmada bir sorun varsa, o sorunla ilgili kısa bir özet sunun
+  3. Uzun açıklamalar yapmayın, sadece nezaket gösterin
 
 **Ton:** Profesyonel, yardımcı, önerici (emredici değil)"""
     else:
@@ -645,8 +653,83 @@ class RAGPipeline:
         if language is None:
             language = self._detect_language(question)
         
+        # Step 0.5: Handle thank you messages and acknowledgments
+        question_lower = question.lower().strip()
+        thank_you_patterns = [
+            r'^(teşekkür|thanks|thank you)(\s+ederim|\s+ediyorum|\s+ediyoruz)?\.?$',
+            r'^(tamam|ok|okay|anladım|tamamdır)(\s+teşekkür|\s+thanks)?(\s+ederim|\s+ediyorum)?\.?$',
+            r'^(tamam|ok|okay|anladım|tamamdır)\.?$',
+        ]
+        for pattern in thank_you_patterns:
+            if re.match(pattern, question_lower):
+                # Thank you messages - return friendly acknowledgment
+                if language == "tr":
+                    answer = "Rica ederim! Başka bir konuda yardımcı olabilir miyim?"
+                else:
+                    answer = "You're welcome! Is there anything else I can help you with?"
+                
+                return RAGResult(
+                    answer=answer,
+                    confidence=0.0,
+                    sources=[],
+                    has_answer=False,
+                    language=language,
+                    intent="acknowledgment",
+                    retrieved_docs=[],
+                    debug_info={"rejection_reason": "thank_you_message"}
+                )
+        
         # Step 0: Check if query is IT-related (filter non-IT queries)
-        if self.it_relevance_checker.should_reject_query(question):
+        # IMPORTANT: Check conversation history - if previous messages were IT-related,
+        # Check if query should be rejected (non-IT)
+        is_it, it_confidence = self.it_relevance_checker.is_it_related(question)
+        should_reject = self.it_relevance_checker.should_reject_query(question)
+        
+        # If query is explicitly non-IT (high confidence, e.g., "şişe", "yemek"), 
+        # reject immediately regardless of conversation history
+        if should_reject and it_confidence >= 0.8:
+            # Explicit non-IT keyword detected - reject immediately
+            logger.info("query_rejected_explicit_non_it", 
+                       question=question[:50],
+                       confidence=it_confidence)
+            # Return rejection immediately - don't process further
+            if language == "tr":
+                answer = "Üzgünüm, bu soru BT (Bilgi Teknolojileri) destek konularıyla ilgili değil. Lütfen bilgisayar, yazılım, ağ, güvenlik veya diğer BT konularıyla ilgili sorularınızı sorun."
+            else:
+                answer = "I'm sorry, this question is not related to IT (Information Technology) support topics. Please ask questions about computers, software, networks, security, or other IT-related topics."
+            
+            return RAGResult(
+                answer=answer,
+                confidence=0.0,
+                sources=[],
+                has_answer=False,
+                language=language,
+                intent=None,
+                retrieved_docs=[],
+                debug_info={"rejection_reason": "explicit_non_it_query", "confidence": it_confidence}
+            )
+        # If query seems non-IT but with lower confidence, check conversation history
+        elif should_reject and conversation_history:
+            # Check if any previous message in conversation was IT-related
+            has_it_context = False
+            for msg in conversation_history:
+                if msg.get("role") in ["user", "assistant"]:
+                    content = msg.get("content", "")
+                    is_it_hist, _ = self.it_relevance_checker.is_it_related(content)
+                    if is_it_hist:
+                        has_it_context = True
+                        logger.debug("it_context_found_in_history", 
+                                   message_preview=content[:50])
+                        break
+            
+            # If conversation has IT context, don't reject follow-up questions
+            if has_it_context:
+                should_reject = False
+                logger.info("query_accepted_due_to_it_context", 
+                           question=question[:50],
+                           has_history=True)
+        
+        if should_reject:
             logger.info("query_rejected_non_it", question=question[:100])
             if language == "tr":
                 answer = "Üzgünüm, bu soru BT (Bilgi Teknolojileri) destek konularıyla ilgili değil. Lütfen bilgisayar, yazılım, ağ, güvenlik veya diğer BT konularıyla ilgili sorularınızı sorun."
@@ -750,16 +833,42 @@ class RAGPipeline:
             retrieval_scores=retrieval_scores
         )
         
-        # Step 6: Apply "no source, no answer" policy
+        # Step 5.5: Adjust confidence threshold for conversation history
+        # If this is a follow-up question in an IT-related conversation,
+        # use a lower threshold to allow more lenient answers
+        effective_threshold = self.confidence_threshold
+        if conversation_history:
+            # Check if conversation has IT context (already checked earlier)
+            has_it_context = False
+            for msg in conversation_history:
+                if msg.get("role") in ["user", "assistant"]:
+                    content = msg.get("content", "")
+                    is_it, _ = self.it_relevance_checker.is_it_related(content)
+                    if is_it:
+                        has_it_context = True
+                        break
+            
+            # Lower threshold for follow-up questions in IT conversations
+            if has_it_context and not self.it_relevance_checker.is_it_related(question)[0]:
+                # This is likely a follow-up question (e.g., "2. adımı anlamadım")
+                effective_threshold = max(0.5, self.confidence_threshold - 0.15)  # Lower by 0.15, min 0.5
+                logger.debug("confidence_threshold_adjusted_for_followup",
+                           original_threshold=self.confidence_threshold,
+                           effective_threshold=effective_threshold,
+                           confidence=confidence)
+        
+        # Step 6: Apply "no source, no answer" policy with adjusted threshold
+        has_sufficient_confidence = confidence >= effective_threshold
         if not has_sufficient_confidence:
             logger.info("answer_rejected_low_confidence",
                        confidence=confidence,
-                       threshold=self.confidence_threshold)
+                       threshold=effective_threshold)
             return self._build_no_answer_result(
                 language=language,
                 reason="low_confidence",
                 retrieved_docs=retrieved_docs,
-                confidence=confidence
+                confidence=confidence,
+                debug_info=debug_info
             )
         
         # Step 7: Build successful result
@@ -804,7 +913,8 @@ class RAGPipeline:
         language: str,
         reason: str,
         retrieved_docs: Optional[List[Dict[str, Any]]] = None,
-        confidence: float = 0.0
+        confidence: float = 0.0,
+        debug_info: Optional[Dict[str, Any]] = None
     ) -> RAGResult:
         """
         Build a RAGResult for cases where we cannot provide an answer.
@@ -814,6 +924,7 @@ class RAGPipeline:
             reason: Reason for no answer ("no_documents", "low_scores", etc.)
             retrieved_docs: Optional retrieved documents
             confidence: Confidence score (default: 0.0)
+            debug_info: Optional debug information dictionary
             
         Returns:
             RAGResult with has_answer=False
@@ -825,9 +936,8 @@ class RAGPipeline:
         
         sources = self._extract_sources(retrieved_docs) if retrieved_docs else []
         
-        # Collect debug info if we have retrieved docs
-        debug_info = None
-        if retrieved_docs:
+        # Use provided debug_info or collect from retrieved docs
+        if debug_info is None and retrieved_docs:
             first_doc = retrieved_docs[0]
             debug_info = {
                 "alpha_used": first_doc.get("alpha_used"),

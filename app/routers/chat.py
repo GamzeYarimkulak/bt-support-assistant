@@ -7,6 +7,10 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import structlog
 from datetime import datetime
+import os
+import json
+import csv
+from pathlib import Path
 
 from app.config import settings
 from core.rag.pipeline import RAGPipeline, RAGResult
@@ -111,6 +115,115 @@ def add_to_conversation_history(session_id: str, role: str, content: str) -> Non
         pass
 
 
+def _save_chat_log(
+    request: ChatRequest,
+    response: ChatResponse,
+    rag_result: RAGResult
+) -> None:
+    """
+    Save chat interaction to log files.
+    
+    Saves:
+    1. JSONL log file with full conversation details
+    2. CSV ticket file (if save_as_tickets enabled) for anomaly detection
+    
+    Args:
+        request: Chat request
+        response: Chat response
+        rag_result: RAG result with metadata
+    """
+    # Create logs directory if it doesn't exist
+    log_dir = Path(settings.chat_logs_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Generate unique ticket ID
+    ticket_id = f"CHAT_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{request.session_id or 'unknown'}"
+    
+    # Prepare log entry
+    log_entry = {
+        "ticket_id": ticket_id,
+        "session_id": request.session_id,
+        "timestamp": datetime.now().isoformat(),
+        "language": response.language,
+        "user_query": request.query,
+        "assistant_answer": response.answer,
+        "confidence": response.confidence,
+        "has_answer": response.has_answer,
+        "intent": response.intent,
+        "num_sources": len(response.sources),
+        "sources": [
+            {
+                "doc_id": src.doc_id,
+                "doc_type": src.doc_type,
+                "title": src.title,
+                "relevance_score": src.relevance_score
+            }
+            for src in response.sources
+        ],
+        "debug_info": response.debug_info.dict() if response.debug_info else None
+    }
+    
+    # Save to JSONL file (append mode)
+    jsonl_file = log_dir / "chat_logs.jsonl"
+    with open(jsonl_file, 'a', encoding='utf-8') as f:
+        f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
+    
+    # Save as ticket CSV (if enabled) for anomaly detection
+    if settings.save_as_tickets:
+        csv_file = log_dir / "chat_tickets.csv"
+        file_exists = csv_file.exists()
+        
+        with open(csv_file, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            
+            # Write header if file is new
+            if not file_exists:
+                writer.writerow([
+                    "ticket_id", "created_at", "short_description", "description",
+                    "category", "subcategory", "priority", "status", "resolution",
+                    "language", "confidence", "has_answer", "session_id"
+                ])
+            
+            # Determine category from query (simple heuristic)
+            category = "General"
+            query_lower = request.query.lower()
+            if any(kw in query_lower for kw in ["outlook", "email", "mail"]):
+                category = "Email"
+            elif any(kw in query_lower for kw in ["vpn", "bağlantı", "connection"]):
+                category = "Network"
+            elif any(kw in query_lower for kw in ["şifre", "password", "login"]):
+                category = "Security"
+            elif any(kw in query_lower for kw in ["yazıcı", "printer"]):
+                category = "Hardware"
+            elif any(kw in query_lower for kw in ["windows", "sistem", "system"]):
+                category = "System"
+            
+            # Determine priority based on confidence
+            priority = "Low"
+            if response.confidence >= 0.8:
+                priority = "High"
+            elif response.confidence >= 0.6:
+                priority = "Medium"
+            
+            writer.writerow([
+                ticket_id,
+                datetime.now().isoformat(),
+                request.query[:200],  # short_description
+                response.answer[:1000] if response.has_answer else "No answer provided",  # description
+                category,
+                "",  # subcategory
+                priority,
+                "Closed" if response.has_answer else "Open",
+                response.answer[:500] if response.has_answer else "",  # resolution
+                response.language,
+                response.confidence,
+                "Yes" if response.has_answer else "No",
+                request.session_id or ""
+            ])
+    
+    logger.debug("chat_log_saved", ticket_id=ticket_id, log_dir=str(log_dir))
+
+
 def get_rag_pipeline() -> RAGPipeline:
     """
     Get or initialize the global RAG pipeline instance.
@@ -146,7 +259,9 @@ def get_rag_pipeline() -> RAGPipeline:
             bm25_retriever=bm25_retriever,
             embedding_retriever=embedding_retriever,
             alpha=0.5,  # Default/fallback alpha
-            use_dynamic_weighting=True  # Enable dynamic alpha computation based on query
+            use_dynamic_weighting=True,  # Enable dynamic alpha computation based on query
+            kb_boost_enabled=settings.kb_boost_enabled,  # Enable KB document boosting
+            kb_boost_factor=settings.kb_boost_factor  # KB boost factor
         )
         
         # Create RAG pipeline (PHASE 8: with real LLM support)
@@ -276,6 +391,13 @@ async def chat(request: ChatRequest) -> ChatResponse:
         if request.session_id:
             add_to_conversation_history(request.session_id, "user", request.query)
             add_to_conversation_history(request.session_id, "assistant", rag_result.answer)
+        
+        # Save chat logs to file (if enabled)
+        if settings.save_chat_logs:
+            try:
+                _save_chat_log(request, response, rag_result)
+            except Exception as e:
+                logger.warning("failed_to_save_chat_log", error=str(e))
         
         return response
         
