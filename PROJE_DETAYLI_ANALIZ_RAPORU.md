@@ -48,7 +48,7 @@ Bu rapor, TÜBİTAK proje önerisinde belirtilen gereksinimlerin mevcut proje ko
 
 | Hedef | Durum | Not |
 |-------|-------|-----|
-| **Tekrarlayan kayıt oranında ≥ %60 azalma** | ❌ %0 | Pilot test gerekiyor (Özdilek Holding) |
+| **Tekrarlayan kayıt oranında ≥ %60 azalma** | ❌ %0 | Pilot test gerekiyor  |
 | **Sanayiye Devredilebilirlik Paketi** | ❌ %0 | Kullanım kılavuzu, güvenlik listeleri, devreye alma rehberi eksik |
 
 ---
@@ -456,7 +456,8 @@ bt-support-assistant/
 3. **Pilot Test**
    - **Durum:** Henüz yapılmadı
    - **Gereken:**
-     - Özdilek Holding ile pilot uygulama
+    
+     
      - Tekrarlayan kayıt oranı ölçümü
      - Gerçek kullanıcı senaryoları
 
@@ -506,7 +507,8 @@ bt-support-assistant/
 ### 8.3. Kalan İşler
 
 1. ⚠️ Anomali tespiti gerçek veri ile test
-2. ⚠️ Pilot uygulama (Özdilek Holding)
+2. ⚠️ Pilot uygulama 
+
 3. ❌ Dokümantasyon (kullanım kılavuzu, güvenlik listeleri, devreye alma rehberi)
 
 ### 8.4. Başarı Oranı
