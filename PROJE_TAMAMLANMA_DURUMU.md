@@ -175,7 +175,6 @@
 ### 3. Pilot Test
 - **Durum:** Henüz yapılmadı
 - **Gereken:**
-  - Özdilek Holding ile pilot uygulama
   - Tekrarlayan kayıt oranı ölçümü
   - Gerçek kullanıcı senaryoları
 
@@ -202,7 +201,6 @@
 3. Performans optimizasyonu
 
 ### Öncelik 3: Pilot Uygulama Hazırlığı
-1. Özdilek Holding ile koordinasyon
 2. Gerçek veri entegrasyonu
 3. Kullanıcı testleri
 
