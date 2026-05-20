@@ -23,7 +23,7 @@
 | 4 | 27.04 - 03.05 | Embedding tabanlı semantik arama hattının geliştirilmesi ve vektör indeksleme altyapısının hazırlanması | %40 | ✅ Tamamlandı |
 | 5 | 04.05 - 10.05 | Hibrit retrieval yapısının kurulması, kelime temelli ve semantik sonuçların birleştirilmesi, sıralama mantığının iyileştirilmesi | %52 | ✅ Tamamlandı |
 | 6 | 11.05 - 17.05 | RAG/chat pipeline’ının geliştirilmesi, kaynaklı yanıt üretimi ve “kaynak yoksa cevap yok” mantığının eklenmesi | %65 | ✅ Tamamlandı |
-| 7 | 18.05 - 24.05 | Anomali tespiti modülünün geliştirilmesi, semantik drift ve örnek anomali senaryolarının test edilmesi | %75 | 🔄 Devam Ediyor |
+| 7 | 18.05 - 24.05 | Anomali tespiti modülünün geliştirilmesi, semantik drift ve örnek anomali senaryolarının test edilmesi | %75 | ✅ Tamamlandı |
 | 8 | 01.06 - 07.06 | API ve frontend entegrasyonunun yapılması, sohbet ekranı ve anomali panelinin birlikte çalışacak şekilde düzenlenmesi | %85 | ⬜ Başlamadı |
 | 9 | 08.06 - 14.06 | Testlerin genişletilmesi, hata senaryolarının kontrol edilmesi, sistem performansının ve yanıt kalitesinin değerlendirilmesi | %93 | ⬜ Başlamadı |
 | 10 | 15.06 - 21.06 | Dokümantasyonun tamamlanması, son hata düzeltmeleri, demo/sunum hazırlığı ve final teslim öncesi genel kontrol | %100 | ⬜ Başlamadı |
@@ -33,6 +33,35 @@
 ---
 
 ## Haftalık İlerleme Kayıtları
+
+### Hafta 7 *(Tarih: 18.05.2026 - 24.05.2026)*
+
+**Plandaki hedef:**
+- Anomali tespiti modülünün geliştirilmesi
+- Semantik drift senaryolarının test edilmesi
+- Örnek anomali durumlarının analiz edilmesi
+
+**Bu hafta yaptıklarım:**
+- Sistem davranışlarını analiz etmek için anomaly detection modülünü projeye ekledim
+- Retrieval ve kullanıcı sorgularındaki olağandışı durumları tespit etmeye yönelik feature extraction yapısını geliştirdim
+- Semantik drift senaryolarını değerlendirmek amacıyla drift detection mekanizmasını oluşturdum
+- Anomali tespit sürecini yöneten temel engine yapısını geliştirdim
+- Farklı senaryolar üzerinden anomaly detection davranışını doğrulamak amacıyla test dosyaları ve senaryo scriptleri ekledim
+
+**Plana göre durumum:**
+- Hafta 7 hedefleri büyük ölçüde tamamlandı
+- Temel anomaly detection ve drift analysis altyapısı oluşturuldu
+
+**Karşılaştığım sorunlar / zorluklar:**
+- Semantik drift davranışlarının ölçülmesi için uygun feature yapılarının belirlenmesi gerekti
+- Farklı anomaly senaryolarında eşik değerlerinin dengelenmesi için testler yapıldı
+- Retrieval davranışlarındaki normal ve anormal örüntülerin ayrıştırılması üzerinde çalışıldı
+
+**Gelecek hafta hedefim:**
+- API ve frontend entegrasyonunu geliştirmek
+- Sohbet ekranı ile anomaly panelini birlikte çalışacak hale getirmek
+- Sistem bileşenlerini ortak endpoint yapısında birleştirmek
+  
 
 ### Hafta 6 *(Tarih: 11.05.2026 - 17.05.2026)*
 
