@@ -24,7 +24,7 @@
 | 5 | 04.05 - 10.05 | Hibrit retrieval yapısının kurulması, kelime temelli ve semantik sonuçların birleştirilmesi, sıralama mantığının iyileştirilmesi | %52 | ✅ Tamamlandı |
 | 6 | 11.05 - 17.05 | RAG/chat pipeline’ının geliştirilmesi, kaynaklı yanıt üretimi ve “kaynak yoksa cevap yok” mantığının eklenmesi | %65 | ✅ Tamamlandı |
 | 7 | 18.05 - 24.05 | Anomali tespiti modülünün geliştirilmesi, semantik drift ve örnek anomali senaryolarının test edilmesi | %75 | ✅ Tamamlandı |
-| 8 | 01.06 - 07.06 | API ve frontend entegrasyonunun yapılması, sohbet ekranı ve anomali panelinin birlikte çalışacak şekilde düzenlenmesi | %85 | 🔄 Devam Ediyor |
+| 8 | 01.06 - 07.06 | API ve frontend entegrasyonunun yapılması, sohbet ekranı ve anomali panelinin birlikte çalışacak şekilde düzenlenmesi | %85 | ✅ Tamamlandı |
 | 9 | 08.06 - 14.06 | Testlerin genişletilmesi, hata senaryolarının kontrol edilmesi, sistem performansının ve yanıt kalitesinin değerlendirilmesi | %93 | ⬜ Başlamadı |
 | 10 | 15.06 - 21.06 | Dokümantasyonun tamamlanması, son hata düzeltmeleri, demo/sunum hazırlığı ve final teslim öncesi genel kontrol | %100 | ⬜ Başlamadı |
 
@@ -33,6 +33,36 @@
 ---
 
 ## Haftalık İlerleme Kayıtları
+
+
+### Hafta 8 *(Tarih: 01.06.2026 - 07.06.2026)*
+
+**Plandaki hedef:**
+- API ve frontend entegrasyonunun yapılması
+- Sohbet ekranı ve anomali panelinin birlikte çalışacak şekilde düzenlenmesi
+
+**Bu hafta yaptıklarım:**
+- FastAPI tabanlı API katmanını yapılandırdım ve router entegrasyonlarını tamamladım
+- Chat servisleri için REST endpointlerini geliştirdim
+- Anomali istatistikleri ve drift analizi için API endpointlerini sisteme ekledim
+- Sohbet ekranı ve anomali panelini içeren web arayüzünü oluşturdum
+- Frontend ile backend arasındaki veri alışverişini sağlayan entegrasyonu gerçekleştirdim
+- Kullanıcı oturumu ve sohbet geçmişi yönetimi için gerekli frontend mantığını ekledim
+- API çağrılarının doğruluğunu test ederek sistem bileşenlerinin birlikte çalıştığını doğruladım
+
+**Plana göre durumum:**
+- Hafta 8 hedefleri büyük ölçüde tamamlandı
+- API ve frontend katmanları entegre edilerek çalışır duruma getirildi
+
+**Karşılaştığım sorunlar / zorluklar:**
+- Frontend ve backend arasındaki veri akışının senkronizasyonu için ek düzenlemeler gerekti
+- Farklı endpointlerden dönen sonuçların arayüzde tutarlı gösterimi üzerinde çalışıldı
+
+**Gelecek hafta hedefim:**
+- Test kapsamını genişletmek
+- Hata senaryolarını değerlendirmek
+- Retrieval, RAG ve anomaly modüllerinin performansını ölçmek
+- Sistemin genel yanıt kalitesini analiz etmek
 
 ### Hafta 7 *(Tarih: 18.05.2026 - 24.05.2026)*
 
