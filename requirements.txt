@@ -30,6 +30,8 @@ scipy>=1.11.0,<2.0.0
 # Data Processing
 python-dotenv>=1.0.0
 pyyaml>=6.0
+pyarrow>=15.0.0
+pypdf>=4.0.0
 
 # OpenAI (optional - only needed if USE_REAL_LLM=true)
 openai>=1.0.0

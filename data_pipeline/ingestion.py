@@ -84,7 +84,7 @@ def load_itsm_tickets_from_csv(path: str) -> List[ITSMTicket]:
         ValueError: If the CSV has missing required columns or invalid data
         
     Example:
-        >>> tickets = load_itsm_tickets_from_csv("data/sample_itsm_tickets.csv")
+        >>> tickets = load_itsm_tickets_from_csv("data/raw/tickets/sample_itsm_tickets.csv")
         >>> print(f"Loaded {len(tickets)} tickets")
     """
     csv_path = Path(path)

@@ -5,12 +5,56 @@ Hybrid retrieval combining BM25 and embedding-based search.
 from typing import List, Dict, Any
 import numpy as np
 import structlog
+import re
 
 from core.retrieval.bm25_retriever import BM25Retriever
 from core.retrieval.embedding_retriever import EmbeddingRetriever
 from core.retrieval.dynamic_weighting import DynamicWeightComputer
 
 logger = structlog.get_logger()
+
+
+QUERY_EXPANSIONS = {
+    "vpn": ["forticlient", "remote access", "uzaktan erişim", "bağlantı"],
+    "forticlient": ["vpn", "remote access", "uzaktan erişim"],
+    "outlook": ["e-posta", "mail", "exchange", "profil", "ost"],
+    "exchange": ["e-posta", "mail", "outlook", "posta akışı"],
+    "mail": ["e-posta", "outlook", "exchange"],
+    "e-posta": ["mail", "outlook", "exchange"],
+    "mfa": ["çok faktörlü doğrulama", "token", "push", "conditional access"],
+    "token": ["mfa", "çok faktörlü doğrulama", "conditional access"],
+    "şifre": ["parola", "password", "reset", "kimlik"],
+    "parola": ["şifre", "password", "reset", "kimlik"],
+    "password": ["şifre", "parola", "reset"],
+    "ransomware": ["fidye yazılımı", "şifrelenmiş dosya", "güvenlik"],
+    "fidye": ["ransomware", "şifrelenmiş dosya", "güvenlik"],
+    "phishing": ["oltalama", "şüpheli e-posta", "güvenlik"],
+    "oltalama": ["phishing", "şüpheli e-posta", "güvenlik"],
+    "teams": ["toplantı", "mikrofon", "ses", "görüntü", "chat"],
+    "mikrofon": ["teams", "ses", "toplantı"],
+    "yazıcı": ["printer", "network printer", "kuyruk", "sürücü"],
+    "printer": ["yazıcı", "network printer", "kuyruk", "sürücü"],
+    "wifi": ["kablosuz", "ağ", "bağlantı"],
+    "wi-fi": ["wifi", "kablosuz", "ağ"],
+    "erp": ["uygulama", "rapor", "muhasebe", "stok"],
+}
+
+
+METADATA_RULES = [
+    (("vpn", "forticlient", "remote access", "uzaktan erişim"), "Ağ", "VPN"),
+    (("wifi", "wi-fi", "kablosuz"), "Ağ", "WiFi"),
+    (("outlook", "ost", "profil"), "E-posta", "Outlook"),
+    (("exchange", "posta akışı", "mail flow"), "E-posta", "Exchange"),
+    (("smtp",), "E-posta", "SMTP"),
+    (("mfa", "token", "push", "conditional access", "çok faktörlü"), "Kimlik & Erişim", "MFA"),
+    (("şifre", "parola", "password", "reset"), "Kimlik & Erişim", "Parola"),
+    (("phishing", "oltalama", "şüpheli e-posta"), "Güvenlik", "Phishing"),
+    (("ransomware", "fidye", "şifrelenmiş dosya"), "Güvenlik", "Ransomware"),
+    (("teams", "mikrofon", "toplantı", "chat"), "Teams", None),
+    (("yazıcı", "printer", "kuyruk", "sürücü"), "Yazıcı", None),
+    (("laptop", "notebook", "güç", "batarya"), "Donanım", "Laptop"),
+    (("erp", "muhasebe", "stok", "crm", "portal"), "Uygulama", None),
+]
 
 # Import settings for KB boost feature flag
 try:
@@ -108,8 +152,12 @@ class HybridRetriever:
         else:
             query_alpha = self.alpha
         
-        # Retrieve from both methods
-        bm25_results = self.bm25_retriever.search(query, top_k=bm25_k)
+        expanded_query = self._expand_query(query)
+        metadata_targets = self._infer_metadata_targets(query)
+
+        # Retrieve from both methods. BM25 benefits from domain synonyms, while
+        # semantic retrieval keeps the original user wording.
+        bm25_results = self.bm25_retriever.search(expanded_query, top_k=bm25_k)
         embedding_results = self.embedding_retriever.search(query, top_k=embedding_k)
         
         # Create score dictionaries
@@ -153,6 +201,10 @@ class HybridRetriever:
                                original_score=hybrid_score / self.kb_boost_factor,
                                boosted_score=hybrid_score,
                                boost_factor=self.kb_boost_factor)
+
+            metadata_boost = self._metadata_boost(doc, metadata_targets)
+            if metadata_boost != 1.0:
+                hybrid_score = hybrid_score * metadata_boost
             
             result = doc.copy()
             result["score"] = hybrid_score
@@ -160,6 +212,7 @@ class HybridRetriever:
             result["embedding_score"] = embedding_score
             result["retrieval_method"] = "hybrid"
             result["alpha_used"] = current_alpha if self.use_dynamic_weighting else self.alpha
+            result["metadata_boost"] = metadata_boost
             
             hybrid_results.append(result)
         
@@ -172,7 +225,9 @@ class HybridRetriever:
                     num_bm25=len(bm25_results),
                     num_embedding=len(embedding_results),
                     num_hybrid=len(final_results),
-                    alpha_used=query_alpha if self.use_dynamic_weighting else self.alpha)
+                    alpha_used=query_alpha if self.use_dynamic_weighting else self.alpha,
+                    expanded_query=expanded_query if expanded_query != query else None,
+                    metadata_targets=metadata_targets)
         
         # Add metadata about source counts for debug info
         for result in final_results:
@@ -180,6 +235,64 @@ class HybridRetriever:
             result["_embedding_source_count"] = len(embedding_results)
         
         return final_results
+
+    def _normalize_text(self, text: str) -> str:
+        return " ".join(str(text or "").casefold().split())
+
+    def _expand_query(self, query: str) -> str:
+        normalized_query = self._normalize_text(query)
+        additions: List[str] = []
+        for term, expansions in QUERY_EXPANSIONS.items():
+            if re.search(rf"(?<!\w){re.escape(term.casefold())}(?!\w)", normalized_query):
+                additions.extend(expansions)
+
+        if not additions:
+            return query
+
+        unique_additions = []
+        seen = set(normalized_query.split())
+        for addition in additions:
+            normalized_addition = self._normalize_text(addition)
+            if normalized_addition and normalized_addition not in seen:
+                unique_additions.append(addition)
+                seen.add(normalized_addition)
+
+        return f"{query} {' '.join(unique_additions)}"
+
+    def _infer_metadata_targets(self, query: str) -> List[Dict[str, str]]:
+        normalized_query = self._normalize_text(query)
+        targets: List[Dict[str, str]] = []
+        seen = set()
+
+        for keywords, category, subcategory in METADATA_RULES:
+            if not any(keyword.casefold() in normalized_query for keyword in keywords):
+                continue
+            key = (category, subcategory or "")
+            if key in seen:
+                continue
+            targets.append({"category": category, "subcategory": subcategory or ""})
+            seen.add(key)
+
+        return targets
+
+    def _metadata_boost(self, doc: Dict[str, Any], targets: List[Dict[str, str]]) -> float:
+        if not targets:
+            return 1.0
+
+        doc_category = self._normalize_text(doc.get("category", ""))
+        doc_subcategory = self._normalize_text(doc.get("subcategory", ""))
+        boost = 1.0
+
+        for target in targets:
+            target_category = self._normalize_text(target.get("category", ""))
+            target_subcategory = self._normalize_text(target.get("subcategory", ""))
+
+            if target_category and doc_category == target_category:
+                boost = max(boost, 1.12)
+                if target_subcategory and doc_subcategory == target_subcategory:
+                    boost = max(boost, 1.28)
+
+        return boost
     
     def _get_doc_id(self, doc: Dict[str, Any]) -> str:
         """

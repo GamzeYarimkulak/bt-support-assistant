@@ -25,7 +25,7 @@ def main():
     
     try:
         num_docs, stats = build_indexes_from_csv(
-            csv_path="data/sample_itsm_tickets.csv",
+            csv_path="data/raw/tickets/sample_itsm_tickets.csv",
             index_dir="indexes/",
             language="tr",
             anonymize=True

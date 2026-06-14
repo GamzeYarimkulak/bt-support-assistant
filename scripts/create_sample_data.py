@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 
-def create_sample_csv(output_path: str = "data/sample_itsm_tickets.csv"):
+def create_sample_csv(output_path: str = "data/raw/tickets/original/sample_itsm_tickets_demo.csv"):
     """
     Create a sample ITSM tickets CSV file with realistic Turkish IT support tickets.
     
@@ -161,7 +161,7 @@ def create_sample_csv(output_path: str = "data/sample_itsm_tickets.csv"):
 
 if __name__ == "__main__":
     import sys
-    output_path = sys.argv[1] if len(sys.argv) > 1 else "data/sample_itsm_tickets.csv"
+    output_path = sys.argv[1] if len(sys.argv) > 1 else "data/raw/tickets/original/sample_itsm_tickets_demo.csv"
     create_sample_csv(output_path)
 
 

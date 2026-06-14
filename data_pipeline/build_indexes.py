@@ -6,8 +6,19 @@ from typing import List, Dict, Any, Optional
 import os
 import json
 import pickle
+import sys
+from datetime import datetime
+from pathlib import Path
 import numpy as np
+import pandas as pd
 import structlog
+
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.retrieval.bm25_retriever import BM25Retriever
 from core.retrieval.embedding_retriever import EmbeddingRetriever
@@ -404,7 +415,7 @@ def build_indexes_from_csv(
         
     Example:
         >>> num_docs, stats = build_indexes_from_csv(
-        ...     "data/sample_itsm_tickets.csv",
+        ...     "data/raw/tickets/sample_itsm_tickets.csv",
         ...     "indexes/",
         ...     anonymize=True
         ... )
@@ -473,4 +484,241 @@ def build_indexes_from_csv(
                metadata_path=metadata_path)
     
     return len(documents), metadata
+
+
+# ============================================================================
+# Processed data pipeline: tickets.parquet + kb_chunks.jsonl
+# ============================================================================
+
+def _clean_text(value: Any) -> str:
+    """Convert missing values to empty strings and normalize whitespace."""
+    if value is None:
+        return ""
+    if isinstance(value, float) and np.isnan(value):
+        return ""
+    return " ".join(str(value).split())
+
+
+def load_processed_tickets_from_parquet(parquet_path: str) -> List[Dict[str, Any]]:
+    """
+    Load processed tickets from data/processed/tickets.parquet.
+
+    Keeps the document shape compatible with the existing BM25 and embedding
+    retrievers while preserving useful ticket metadata.
+    """
+    path = Path(parquet_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Processed tickets parquet not found: {parquet_path}")
+
+    df = pd.read_parquet(path)
+    documents: List[Dict[str, Any]] = []
+
+    for index, row in df.iterrows():
+        ticket_id = _clean_text(row.get("ticket_id")) or _clean_text(row.get("id")) or f"ticket-{index + 1}"
+        text = _clean_text(row.get("text"))
+        if not text:
+            text = _clean_text(
+                " ".join(
+                    [
+                        _clean_text(row.get("short_description")),
+                        _clean_text(row.get("description")),
+                        _clean_text(row.get("resolution")),
+                    ]
+                )
+            )
+
+        if not text:
+            continue
+
+        documents.append(
+            {
+                "id": ticket_id,
+                "doc_id": ticket_id,
+                "ticket_id": ticket_id,
+                "doc_type": "ticket",
+                "title": _clean_text(row.get("short_description")),
+                "text": text,
+                "category": _clean_text(row.get("category")),
+                "subcategory": _clean_text(row.get("subcategory")),
+                "priority": _clean_text(row.get("priority")),
+                "status": _clean_text(row.get("status")),
+                "created_at": _clean_text(row.get("created_at")),
+                "resolution": _clean_text(row.get("resolution")),
+                "source": _clean_text(row.get("source")),
+                "language": _clean_text(row.get("language")),
+                "is_synthetic": bool(row.get("is_synthetic")) if "is_synthetic" in df.columns else False,
+            }
+        )
+
+    return documents
+
+
+def load_processed_kb_chunks_from_jsonl(jsonl_path: str) -> List[Dict[str, Any]]:
+    """
+    Load processed KB chunks from data/processed/kb_chunks.jsonl.
+
+    Fallbacks:
+    - id yoksa doc_id kullanılır.
+    - source_pdf yoksa source kullanılır.
+    - title varsa doküman metadata'sında korunur.
+    """
+    path = Path(jsonl_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Processed KB chunks JSONL not found: {jsonl_path}")
+
+    documents: List[Dict[str, Any]] = []
+
+    with path.open("r", encoding="utf-8-sig") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            line = line.strip()
+            if not line:
+                continue
+
+            chunk = json.loads(line)
+            doc_id = _clean_text(chunk.get("id")) or _clean_text(chunk.get("doc_id")) or f"kb-{line_number}"
+            title = _clean_text(chunk.get("title"))
+            text = _clean_text(chunk.get("text")) or _clean_text(chunk.get("content"))
+            source = _clean_text(chunk.get("source_pdf")) or _clean_text(chunk.get("source"))
+
+            if not text:
+                continue
+
+            documents.append(
+                {
+                    "id": doc_id,
+                    "doc_id": doc_id,
+                    "document_id": _clean_text(chunk.get("document_id")) or doc_id,
+                    "doc_type": "kb",
+                    "title": title,
+                    "text": text,
+                    "category": _clean_text(chunk.get("category")),
+                    "priority": "",
+                    "status": "",
+                    "created_at": None,
+                    "source": source,
+                    "source_pdf": source,
+                    "page": chunk.get("page", 0),
+                    "chunk_index": chunk.get("chunk_index", line_number - 1),
+                    "metadata": chunk.get("metadata", {}),
+                }
+            )
+
+    return documents
+
+
+def build_indexes_from_processed_data(
+    tickets_parquet: str = "data/processed/tickets.parquet",
+    kb_jsonl: str = "data/processed/kb_chunks.jsonl",
+    index_dir: str = "indexes",
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+    limit: Optional[int] = None,
+) -> tuple[int, Dict[str, Any]]:
+    """
+    Build BM25 and FAISS indexes from processed ticket and KB data.
+
+    Existing CSV-based functions remain available for backward compatibility.
+    """
+    ticket_documents = load_processed_tickets_from_parquet(tickets_parquet)
+    kb_documents = load_processed_kb_chunks_from_jsonl(kb_jsonl)
+    total_available_documents = len(ticket_documents) + len(kb_documents)
+
+    if limit is not None:
+        if limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        kb_limit = min(len(kb_documents), limit)
+        ticket_limit = max(limit - kb_limit, 0)
+        indexed_ticket_documents = ticket_documents[:ticket_limit]
+        indexed_kb_documents = kb_documents[:kb_limit]
+    else:
+        indexed_ticket_documents = ticket_documents
+        indexed_kb_documents = kb_documents
+
+    documents = indexed_ticket_documents + indexed_kb_documents
+
+    if not documents:
+        raise ValueError("No processed ticket or KB documents found for indexing")
+
+    # Prefer the already cached model when running in restricted environments.
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
+    index_builder = IndexBuilder(
+        index_dir=index_dir,
+        embedding_model_name=embedding_model,
+    )
+    bm25_retriever, embedding_retriever = index_builder.build_hybrid_indexes(
+        documents=documents,
+        text_field="text",
+    )
+
+    metadata = {
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "num_documents": len(documents),
+        "num_tickets": len(indexed_ticket_documents),
+        "num_kb_documents": len(indexed_kb_documents),
+        "total_available_documents": total_available_documents,
+        "indexed_documents": len(documents),
+        "limit_used": limit is not None,
+        "limit_value": limit,
+        "total_available_tickets": len(ticket_documents),
+        "total_available_kb_documents": len(kb_documents),
+        "embedding_model": embedding_model,
+        "tickets_source": tickets_parquet,
+        "kb_source": kb_jsonl,
+        "bm25_stats": bm25_retriever.get_index_stats(),
+        "embedding_stats": embedding_retriever.get_index_stats(),
+    }
+
+    metadata_path = os.path.join(index_dir, "index_metadata.json")
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False, default=str)
+
+    logger.info(
+        "processed_index_build_complete",
+        num_documents=len(documents),
+        num_tickets=len(indexed_ticket_documents),
+        num_kb_documents=len(indexed_kb_documents),
+        total_available_documents=total_available_documents,
+        limit=limit,
+        index_dir=index_dir,
+    )
+
+    return len(documents), metadata
+
+
+def main() -> None:
+    """Build indexes from the default processed data files."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Build BM25 and FAISS indexes from processed tickets and KB chunks."
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximum number of processed ticket + KB documents to index.",
+    )
+    args = parser.parse_args()
+
+    num_documents, metadata = build_indexes_from_processed_data(limit=args.limit)
+
+    print("Index build complete.")
+    print(f"Total available documents: {metadata['total_available_documents']}")
+    print(f"Total documents indexed: {num_documents}")
+    print(f"Tickets indexed: {metadata['num_tickets']}")
+    print(f"KB documents indexed: {metadata['num_kb_documents']}")
+    print(f"Limit used: {metadata['limit_used']}")
+    if metadata["limit_value"] is not None:
+        print(f"Limit value: {metadata['limit_value']}")
+    print(f"Embedding model: {metadata['embedding_model']}")
+    print("Outputs:")
+    print("- indexes/bm25_index.pkl")
+    print("- indexes/embedding_data.pkl")
+    print("- indexes/faiss_index.bin")
+    print("- indexes/index_metadata.json")
+
+
+if __name__ == "__main__":
+    main()
 
