@@ -1,115 +1,58 @@
-/**
- * PHASE 10: Chat Interface - Message History
- * Converts single-turn Q&A into a chat-like interface with message history
- * Backend API remains unchanged - only frontend is modified
- */
-
-// ============================================
-// CONFIGURATION
-// ============================================
-
 const API_BASE_URL = 'http://localhost:8000';
 
 const API_ENDPOINTS = {
     chat: `${API_BASE_URL}/api/v1/chat`,
     anomalyStats: `${API_BASE_URL}/api/v1/anomaly/stats`,
-    anomalyDetect: `${API_BASE_URL}/api/v1/anomaly/detect`
+    anomalyDetect: `${API_BASE_URL}/api/v1/anomaly/detect`,
+    anomalyQuality: `${API_BASE_URL}/api/v1/anomaly/quality`
 };
 
-// ============================================
-// STATE MANAGEMENT
-// ============================================
-
-/**
- * Message history state
- * Each message has: { role, text, timestamp, confidence?, sources? }
- */
 let chatMessages = [];
-
-/**
- * Session ID for conversation tracking
- * Persists across page loads via localStorage
- */
 let sessionId = null;
+let qualityLoaded = false;
 
-// ============================================
-// SESSION MANAGEMENT
-// ============================================
-
-/**
- * Get or create a session ID for conversation tracking.
- */
 function getOrCreateSessionId() {
     if (sessionId) {
         return sessionId;
     }
-    
+
     sessionId = localStorage.getItem('bt_support_session_id');
-    
     if (!sessionId) {
-        // Create unique session ID: timestamp + random
         sessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
         localStorage.setItem('bt_support_session_id', sessionId);
-        console.log('🆕 New session created:', sessionId);
-    } else {
-        console.log('🔄 Existing session loaded:', sessionId);
     }
-    
+
     return sessionId;
 }
 
-/**
- * Clear session (for testing or manual reset).
- */
-function clearSession() {
-    localStorage.removeItem('bt_support_session_id');
-    sessionId = null;
-    chatMessages = [];
-    renderChatMessages();
-    console.log('🗑️ Session cleared');
-}
-
-// ============================================
-// CHAT MESSAGE RENDERING
-// ============================================
-
-/**
- * Render all chat messages to the DOM
- */
 function renderChatMessages() {
     const messagesContainer = document.getElementById('chat-messages');
-    
+    if (!messagesContainer) {
+        return;
+    }
+
     if (chatMessages.length === 0) {
-        // Show empty state
         messagesContainer.innerHTML = `
             <div class="chat-empty-state">
-                <div class="chat-empty-state-icon">💬</div>
-                <div class="chat-empty-state-text">Henüz mesaj yok</div>
-                <div class="chat-empty-state-hint">Aşağıdaki kutuya sorunuzu yazarak başlayın</div>
+                <div class="chat-empty-state-icon"></div>
+                <div class="chat-empty-state-text">Oturum hazır</div>
+                <div class="chat-empty-state-hint">BT destek soruları için RAG hattı beklemede</div>
             </div>
         `;
         return;
     }
-    
-    // Render all messages
+
     messagesContainer.innerHTML = '';
-    
     chatMessages.forEach(message => {
-        const messageEl = createMessageElement(message);
-        messagesContainer.appendChild(messageEl);
+        messagesContainer.appendChild(createMessageElement(message));
     });
-    
-    // Auto-scroll to bottom
     scrollToBottom();
 }
 
-/**
- * Create a DOM element for a single message
- */
 function createMessageElement(message) {
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${message.role}`;
-    
+
     if (message.role === 'user') {
         messageDiv.innerHTML = `
             <div class="message-bubble">
@@ -117,275 +60,224 @@ function createMessageElement(message) {
                 <div class="message-timestamp">${formatTimestamp(message.timestamp)}</div>
             </div>
         `;
-    } else if (message.role === 'assistant') {
-        const confidenceBadgeHtml = message.confidence !== undefined 
-            ? `<span class="confidence-badge ${getConfidenceClass(message.confidence)}">
-                 Güven: ${Math.round(message.confidence * 100)}%
-               </span>`
-            : '';
-        
-        const languageBadge = message.language 
-            ? `<span class="message-badge">🌐 ${message.language.toUpperCase()}</span>`
-            : '';
-        
-        const hasAnswerBadge = message.has_answer !== undefined
-            ? `<span class="message-badge">${message.has_answer ? '✅ Cevap Bulundu' : '❌ Cevap Bulunamadı'}</span>`
-            : '';
-        
-        const sourcesHtml = message.sources && message.sources.length > 0
-            ? `<div class="message-sources">
-                 <div class="message-sources-title">📚 Kaynaklar:</div>
-                 ${message.sources.map((source, idx) => `
-                   <div class="message-source-item">
-                     <span class="message-source-title">${idx + 1}. ${source.title || source.doc_id}</span>
-                     <span class="message-source-score">${(source.relevance_score * 100).toFixed(0)}%</span>
-                   </div>
-                 `).join('')}
-               </div>`
-            : '';
-        
-        // Debug info HTML (retrieval details)
-        const debugHtml = message.debug_info
-            ? `<div class="message-debug-info">
-                 <div class="message-debug-title">🔍 Arama Detayları:</div>
-                 <div class="message-debug-content">
-                   <div class="debug-item">
-                     <span class="debug-label">Dinamik Alpha:</span>
-                     <span class="debug-value">${message.debug_info.alpha_used !== null && message.debug_info.alpha_used !== undefined ? message.debug_info.alpha_used.toFixed(2) : 'N/A'}</span>
-                     <span class="debug-hint">${message.debug_info.alpha_used < 0.4 ? '(Embedding ağırlıklı)' : message.debug_info.alpha_used > 0.6 ? '(BM25 ağırlıklı)' : '(Dengeli)'}</span>
-                   </div>
-                   <div class="debug-item">
-                     <span class="debug-label">Sorgu Tipi:</span>
-                     <span class="debug-value">${message.debug_info.query_type || 'N/A'}</span>
-                   </div>
-                   <div class="debug-item">
-                     <span class="debug-label">BM25 Sonuçları:</span>
-                     <span class="debug-value">${message.debug_info.bm25_results_count || 0}</span>
-                   </div>
-                   <div class="debug-item">
-                     <span class="debug-label">Embedding Sonuçları:</span>
-                     <span class="debug-value">${message.debug_info.embedding_results_count || 0}</span>
-                   </div>
-                   <div class="debug-item">
-                     <span class="debug-label">Hibrit Sonuçlar:</span>
-                     <span class="debug-value">${message.debug_info.hybrid_results_count || 0}</span>
-                   </div>
-                 </div>
-               </div>`
-            : '';
-        
-        messageDiv.innerHTML = `
-            <div class="message-bubble">
-                <div class="message-content">${formatAssistantMessage(message.text)}</div>
-                <div class="message-metadata">
-                    ${confidenceBadgeHtml}
-                    ${hasAnswerBadge}
-                    ${languageBadge}
-                </div>
-                ${sourcesHtml}
-                ${debugHtml}
-                <div class="message-timestamp">${formatTimestamp(message.timestamp)}</div>
-            </div>
-        `;
-    } else if (message.role === 'error') {
+        return messageDiv;
+    }
+
+    if (message.role === 'error') {
         messageDiv.className = 'message error';
         messageDiv.innerHTML = `
             <div class="message-bubble">
-                <div class="message-content">❌ ${escapeHtml(message.text)}</div>
+                <div class="message-content">${escapeHtml(message.text)}</div>
                 <div class="message-timestamp">${formatTimestamp(message.timestamp)}</div>
             </div>
         `;
+        return messageDiv;
     }
-    
+
+    const confidenceBadgeHtml = message.confidence !== undefined
+        ? `<span class="confidence-badge ${getConfidenceClass(message.confidence)}">Güven: ${Math.round(message.confidence * 100)}%</span>`
+        : '';
+
+    const languageBadge = message.language
+        ? `<span class="message-badge">${escapeHtml(String(message.language).toUpperCase())}</span>`
+        : '';
+
+    const hasAnswerBadge = message.has_answer !== undefined
+        ? `<span class="message-badge">${message.has_answer ? 'Yanıt var' : 'Yanıt yok'}</span>`
+        : '';
+
+    const sourcesHtml = renderSources(message.sources || []);
+    const debugHtml = renderDebugInfo(message.debug_info);
+
+    messageDiv.innerHTML = `
+        <div class="message-bubble">
+            <div class="message-content">${formatAssistantMessage(message.text)}</div>
+            <div class="message-metadata">
+                ${confidenceBadgeHtml}
+                ${hasAnswerBadge}
+                ${languageBadge}
+            </div>
+            ${sourcesHtml}
+            ${debugHtml}
+            <div class="message-timestamp">${formatTimestamp(message.timestamp)}</div>
+        </div>
+    `;
+
     return messageDiv;
 }
 
-/**
- * Format assistant message with markdown-like formatting
- */
-function formatAssistantMessage(text) {
-    return text
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')  // Bold
-        .replace(/\n/g, '<br>');  // Line breaks
+function renderSources(sources) {
+    if (!sources.length) {
+        return '';
+    }
+
+    return `
+        <div class="message-sources">
+            <div class="message-sources-title">Kaynaklar</div>
+            ${sources.map((source, idx) => {
+                const title = source.title || source.doc_id || `Kaynak ${idx + 1}`;
+                const score = Number(source.relevance_score ?? 0);
+                return `
+                    <div class="message-source-item">
+                        <span class="message-source-title">${idx + 1}. ${escapeHtml(title)}</span>
+                        <span class="message-source-score">Skor ${score.toFixed(2)}</span>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
 }
 
-/**
- * Get CSS class for confidence level
- */
+function renderDebugInfo(debugInfo) {
+    if (!debugInfo) {
+        return '';
+    }
+
+    const alpha = debugInfo.alpha_used;
+    const alphaLabel = alpha === null || alpha === undefined ? 'N/A' : Number(alpha).toFixed(2);
+    const alphaHint = alpha < 0.4
+        ? '(Embedding ağırlıklı)'
+        : alpha > 0.6
+            ? '(BM25 ağırlıklı)'
+            : '(Dengeli)';
+
+    return `
+        <div class="message-debug-info">
+            <div class="message-debug-title">Arama detayları</div>
+            <div class="message-debug-content">
+                <div class="debug-item">
+                    <span class="debug-label">Dinamik Alpha:</span>
+                    <span class="debug-value">${alphaLabel}</span>
+                    <span class="debug-hint">${alpha === null || alpha === undefined ? '' : alphaHint}</span>
+                </div>
+                <div class="debug-item">
+                    <span class="debug-label">Sorgu Tipi:</span>
+                    <span class="debug-value">${escapeHtml(debugInfo.query_type || 'N/A')}</span>
+                </div>
+                <div class="debug-item">
+                    <span class="debug-label">BM25 sonuçları:</span>
+                    <span class="debug-value">${debugInfo.bm25_results_count || 0}</span>
+                </div>
+                <div class="debug-item">
+                    <span class="debug-label">Embedding sonuçları:</span>
+                    <span class="debug-value">${debugInfo.embedding_results_count || 0}</span>
+                </div>
+                <div class="debug-item">
+                    <span class="debug-label">Hibrit sonuçlar:</span>
+                    <span class="debug-value">${debugInfo.hybrid_results_count || 0}</span>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function formatAssistantMessage(text = '') {
+    return escapeHtml(text)
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\n/g, '<br>');
+}
+
 function getConfidenceClass(confidence) {
     if (confidence >= 0.7) return 'confidence-high';
     if (confidence >= 0.4) return 'confidence-medium';
     return 'confidence-low';
 }
 
-/**
- * Format timestamp (HH:MM)
- */
 function formatTimestamp(timestamp) {
     const date = new Date(timestamp);
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    return `${hours}:${minutes}`;
+    return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
-/**
- * Escape HTML to prevent XSS
- */
-function escapeHtml(text) {
+function escapeHtml(value) {
     const div = document.createElement('div');
-    div.textContent = text;
+    div.textContent = value === null || value === undefined ? '' : String(value);
     return div.innerHTML;
 }
 
-/**
- * Auto-scroll to bottom of chat
- */
 function scrollToBottom() {
     const messagesContainer = document.getElementById('chat-messages');
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    if (messagesContainer) {
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
 }
 
-// ============================================
-// CONTEXTUAL QUERY BUILDING
-// ============================================
-
-/**
- * Build a contextual query string from recent message history.
- * This allows the backend to understand follow-up questions without
- * changing the backend API.
- * 
- * Strategy:
- * - Take last N messages (e.g., 4 messages = 2 turns)
- * - Format as: "Önceki konuşma:\nKullanıcı: ...\nAsistan: ...\n\nYeni sorum: ..."
- * - If no history, return plain input
- * - Special handling for step-number follow-ups ("2. adımı anlamadım")
- * 
- * @param {Array} messages - Array of message objects { role, text, ... }
- * @param {string} currentInput - Current user input
- * @returns {string} - Contextual query string for backend
- */
 function buildContextualQuery(messages, currentInput) {
-    // Configuration
-    const MAX_CONTEXT_MESSAGES = 4;      // Last 4 messages (2 turns: user+assistant, user+assistant)
-    const MAX_USER_MESSAGE_LENGTH = 150; // User messages can be longer
-    const MAX_ASSISTANT_BRIEF = 120;     // Brief assistant summary
-    const MAX_ASSISTANT_FULL = 600;      // Full assistant text for step follow-ups
-    const MAX_TOTAL_LENGTH = 1200;       // Total context character limit
-    
-    // If no history, return plain input (first message in conversation)
+    const MAX_CONTEXT_MESSAGES = 4;
+    const MAX_USER_MESSAGE_LENGTH = 150;
+    const MAX_ASSISTANT_BRIEF = 120;
+    const MAX_ASSISTANT_FULL = 600;
+    const MAX_TOTAL_LENGTH = 1200;
+
     if (!messages || messages.length === 0) {
         return currentInput;
     }
-    
-    // Get recent messages (excluding error messages)
+
     const recentMessages = messages
         .filter(msg => msg.role !== 'error')
         .slice(-MAX_CONTEXT_MESSAGES);
-    
-    // If no valid history, return plain input
+
     if (recentMessages.length === 0) {
         return currentInput;
     }
-    
-    // Detect if current input is asking about a specific step
-    // Pattern: "2. adım", "3. adımı", "birinci adımda", etc.
+
     const stepPattern = /(\d+|birinci|ikinci|üçüncü|dördüncü|beşinci)\s*\.?\s*adım/i;
     const isStepFollowUp = stepPattern.test(currentInput);
-    
-    console.log('🔍 Step follow-up detected:', isStepFollowUp, 'in:', currentInput);
-    
-    // Build context lines
     const contextLines = [];
     let totalLength = 0;
-    
+
     for (let i = 0; i < recentMessages.length; i++) {
         const msg = recentMessages[i];
         const roleLabel = msg.role === 'user' ? 'Kullanıcı' : 'Asistan';
-        
-        let msgText = msg.text;
-        
-        // Determine max length for this message
-        let maxLen;
-        if (msg.role === 'user') {
-            maxLen = MAX_USER_MESSAGE_LENGTH;
-        } else if (msg.role === 'assistant') {
-            // If current input references steps AND this is the most recent assistant message,
-            // include more context so the LLM can see all steps
-            const isLastAssistant = (i === recentMessages.length - 1) || 
-                                    (i === recentMessages.length - 2 && recentMessages[recentMessages.length - 1].role === 'user');
-            
-            if (isStepFollowUp && isLastAssistant) {
-                maxLen = MAX_ASSISTANT_FULL;
-            } else {
-                maxLen = MAX_ASSISTANT_BRIEF;
-            }
+        let msgText = msg.text || '';
+        let maxLen = msg.role === 'user' ? MAX_USER_MESSAGE_LENGTH : MAX_ASSISTANT_BRIEF;
+
+        if (msg.role === 'assistant') {
+            const isLastAssistant = (i === recentMessages.length - 1)
+                || (i === recentMessages.length - 2 && recentMessages[recentMessages.length - 1].role === 'user');
+            maxLen = isStepFollowUp && isLastAssistant ? MAX_ASSISTANT_FULL : MAX_ASSISTANT_BRIEF;
         }
-        
-        // Truncate if needed
+
         if (msgText.length > maxLen) {
-            msgText = msgText.substring(0, maxLen) + '...';
+            msgText = `${msgText.substring(0, maxLen)}...`;
         }
-        
-        // Clean up whitespace but preserve structure for multi-step answers
+
         msgText = msgText.replace(/\n{3,}/g, '\n\n').trim();
-        
         const contextLine = `${roleLabel}: ${msgText}`;
-        
-        // Check total length limit
+
         if (totalLength + contextLine.length + currentInput.length + 100 > MAX_TOTAL_LENGTH) {
-            // If we're about to exceed limit, stop adding earlier messages
-            // but try to keep at least the last assistant message for step follow-ups
             if (isStepFollowUp && msg.role === 'assistant' && contextLines.length === 0) {
-                // Force include this assistant message even if it's long
                 contextLines.push(contextLine);
             }
             break;
         }
-        
+
         contextLines.push(contextLine);
         totalLength += contextLine.length;
     }
-    
-    // If no context was built, return plain input
+
     if (contextLines.length === 0) {
         return currentInput;
     }
-    
-    // Build final contextual query
-    let contextualQuery;
-    
+
     if (isStepFollowUp) {
-        // For step follow-ups, be more explicit
-        contextualQuery = 
-            "Önceki konuşma:\n" +
-            contextLines.join("\n") +
-            "\n\nKullanıcı şimdi yukarıdaki adımlardan biri hakkında soru soruyor: " + currentInput +
-            "\n\nLütfen ilgili adımı daha detaylı açıkla.";
-    } else {
-        // Standard contextual query
-        contextualQuery = 
-            "Önceki konuşma:\n" +
-            contextLines.join("\n") +
-            "\n\nYeni sorum: " + currentInput;
+        return [
+            'Önceki konuşma:',
+            contextLines.join('\n'),
+            '',
+            `Kullanıcı şimdi yukarıdaki adımlardan biri hakkında soru soruyor: ${currentInput}`,
+            '',
+            'Lütfen ilgili adımı daha detaylı açıkla.'
+        ].join('\n');
     }
-    
-    console.log('📝 Contextual query built:', {
-        historyMessages: contextLines.length,
-        isStepFollowUp: isStepFollowUp,
-        totalLength: contextualQuery.length,
-        preview: contextualQuery.substring(0, 250) + '...'
-    });
-    
-    return contextualQuery;
+
+    return [
+        'Önceki konuşma:',
+        contextLines.join('\n'),
+        '',
+        `Yeni sorum: ${currentInput}`
+    ].join('\n');
 }
 
-// ============================================
-// CHAT SUBMISSION
-// ============================================
-
-/**
- * Submit chat query to backend
- */
 async function submitChatQuery() {
     const queryInput = document.getElementById('query-input');
     const languageSelect = document.getElementById('language-select');
@@ -396,44 +288,23 @@ async function submitChatQuery() {
     const language = languageSelect.value;
 
     if (!query) {
-        return; // Don't submit empty messages
+        return;
     }
 
-    // Disable input while processing
     submitBtn.disabled = true;
     queryInput.disabled = true;
-    sendBtnText.textContent = '⏳ Gönderiliyor...';
-    
-    // Show loading indicator
+    sendBtnText.textContent = 'Gönderiliyor';
     showLoading(true);
-
-    // Clear input immediately
     queryInput.value = '';
 
-    // Build contextual query BEFORE adding user message to history
-    // This way the first message won't have "Önceki konuşma:" prefix
-    const contextualQuery = buildContextualQuery(chatMessages, query);
-
-    // NOW add user message to history for display
-    const userMessage = {
+    chatMessages.push({
         role: 'user',
-        text: query,  // Store original query, not contextual
+        text: query,
         timestamp: Date.now()
-    };
-    chatMessages.push(userMessage);
+    });
     renderChatMessages();
 
     try {
-        // Get session ID for conversation tracking
-        const currentSessionId = getOrCreateSessionId();
-        
-        console.log('🚀 Sending query to backend:', {
-            originalInput: query,
-            contextualQuery: contextualQuery.substring(0, 150) + '...',
-            hasContext: contextualQuery !== query
-        });
-        
-        // POST to /api/v1/chat (API unchanged - still just a query string!)
         const response = await fetch(API_ENDPOINTS.chat, {
             method: 'POST',
             headers: {
@@ -441,9 +312,9 @@ async function submitChatQuery() {
                 'Accept': 'application/json'
             },
             body: JSON.stringify({
-                query: contextualQuery,  // ← Now includes context!
-                language: language,
-                session_id: currentSessionId
+                query,
+                language,
+                session_id: getOrCreateSessionId()
             })
         });
 
@@ -453,10 +324,7 @@ async function submitChatQuery() {
         }
 
         const data = await response.json();
-        console.log('Chat response:', data);
-
-        // Add assistant message to history
-        const assistantMessage = {
+        chatMessages.push({
             role: 'assistant',
             text: data.answer,
             timestamp: Date.now(),
@@ -464,49 +332,31 @@ async function submitChatQuery() {
             has_answer: data.has_answer,
             language: data.language,
             sources: data.sources || [],
-            debug_info: data.debug_info || null  // Include debug info
-        };
-        chatMessages.push(assistantMessage);
+            debug_info: data.debug_info || null
+        });
         renderChatMessages();
-
     } catch (error) {
-        console.error('Chat error:', error);
-        
-        // Add error message to chat
-        const errorMessage = {
+        chatMessages.push({
             role: 'error',
             text: `Bir hata oluştu: ${error.message}. Lütfen tekrar deneyin.`,
             timestamp: Date.now()
-        };
-        chatMessages.push(errorMessage);
+        });
         renderChatMessages();
     } finally {
-        // Re-enable input
         submitBtn.disabled = false;
         queryInput.disabled = false;
-        sendBtnText.textContent = '🚀 Gönder';
+        sendBtnText.textContent = 'Gönder';
         showLoading(false);
-        
-        // Focus back to input
         queryInput.focus();
     }
 }
 
-/**
- * Show/hide loading indicator
- */
 function showLoading(show) {
     const loadingDiv = document.getElementById('chat-loading');
-    if (show) {
-        loadingDiv.classList.remove('hidden');
-    } else {
-        loadingDiv.classList.add('hidden');
+    if (loadingDiv) {
+        loadingDiv.classList.toggle('hidden', !show);
     }
 }
-
-// ============================================
-// TAB NAVIGATION
-// ============================================
 
 function initTabs() {
     const tabButtons = document.querySelectorAll('.tab-button');
@@ -515,31 +365,123 @@ function initTabs() {
     tabButtons.forEach(button => {
         button.addEventListener('click', () => {
             const targetTab = button.dataset.tab;
-
-            // Update active tab button
             tabButtons.forEach(btn => btn.classList.remove('active'));
             button.classList.add('active');
-
-            // Update active panel
             panels.forEach(panel => {
-                if (panel.id === `${targetTab}-panel`) {
-                    panel.classList.add('active');
-                } else {
-                    panel.classList.remove('active');
-                }
+                panel.classList.toggle('active', panel.id === `${targetTab}-panel`);
             });
+
+            if (targetTab === 'anomaly' && !qualityLoaded) {
+                loadAnomalyQuality();
+            }
         });
     });
 }
 
-// ============================================
-// ANOMALY PANEL - STATISTICS
-// ============================================
+async function loadAnomalyQuality() {
+    const loadBtn = document.getElementById('load-quality-btn');
+    showAnomalyLoading('quality', true);
+    hideAnomalyError('quality');
+    hideAnomalyResult('quality');
+    if (loadBtn) {
+        loadBtn.disabled = true;
+    }
+
+    try {
+        const response = await fetch(API_ENDPOINTS.anomalyQuality, {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' }
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.detail || `HTTP ${response.status}`);
+        }
+
+        displayAnomalyQuality(await response.json());
+        qualityLoaded = true;
+    } catch (error) {
+        showAnomalyError('quality', `Hata: ${error.message}`);
+    } finally {
+        showAnomalyLoading('quality', false);
+        if (loadBtn) {
+            loadBtn.disabled = false;
+        }
+    }
+}
+
+function displayAnomalyQuality(data) {
+    const resultDiv = document.getElementById('quality-result');
+    const summaryDiv = document.getElementById('quality-summary');
+    const detailDiv = document.getElementById('quality-detail');
+    const eventLevel = data.event_level || {};
+    const dayLevel = data.day_level || {};
+    const severity = data.severity || {};
+    const counts = data.counts || {};
+
+    resultDiv.classList.remove('hidden');
+    summaryDiv.innerHTML = `
+        ${renderQualityCard('Event precision', eventLevel.precision, 'quality-good')}
+        ${renderQualityCard('Event recall', eventLevel.recall, 'quality-strong')}
+        ${renderQualityCard('Event F1', eventLevel.f1, 'quality-strong')}
+        ${renderQualityCard('Day F1', dayLevel.f1, 'quality-strong')}
+        ${renderQualityCard('Specificity', dayLevel.specificity, 'quality-good')}
+        ${renderQualityCard('Severity match', severity.exact_match_rate, 'quality-watch')}
+    `;
+
+    detailDiv.innerHTML = `
+        <div class="quality-note">
+            <span>Scope</span>
+            <strong>${formatScope(data.metric_scope)}</strong>
+        </div>
+        <div class="quality-kv-grid">
+            ${renderQualityKV('GT events', counts.ground_truth_events)}
+            ${renderQualityKV('Detected', counts.detected_events)}
+            ${renderQualityKV('Matched', counts.matched_events)}
+            ${renderQualityKV('FP candidates', counts.false_positive_candidates)}
+            ${renderQualityKV('Positive days', counts.positive_days)}
+            ${renderQualityKV('Negative days', counts.negative_days)}
+            ${renderQualityKV('Score threshold', dayLevel.score_threshold, 2)}
+            ${renderQualityKV('Semantic drift', data.semantic_drift_evaluable ? 'evaluable' : 'not evaluable')}
+        </div>
+    `;
+}
+
+function renderQualityCard(label, value, className) {
+    return `
+        <div class="quality-card ${className}">
+            <div class="quality-label">${label}</div>
+            <div class="quality-value">${formatPercent(value)}</div>
+        </div>
+    `;
+}
+
+function renderQualityKV(label, value, fractionDigits = 0) {
+    const displayValue = typeof value === 'number'
+        ? value.toFixed(fractionDigits)
+        : escapeHtml(value ?? '-');
+    return `
+        <div class="quality-kv">
+            <span>${label}</span>
+            <strong>${displayValue}</strong>
+        </div>
+    `;
+}
+
+function formatPercent(value) {
+    const numeric = Number(value ?? 0);
+    return `${Math.round(numeric * 100)}%`;
+}
+
+function formatScope(scope) {
+    if (scope === 'independent_synthetic_validation_with_negative_days') {
+        return 'Independent validation + negative days';
+    }
+    return escapeHtml(scope || 'validation report');
+}
 
 async function loadAnomalyStats() {
     const loadBtn = document.getElementById('load-stats-btn');
-
-    // Show loading state
     showAnomalyLoading('stats', true);
     hideAnomalyError('stats');
     hideAnomalyResult('stats');
@@ -548,9 +490,7 @@ async function loadAnomalyStats() {
     try {
         const response = await fetch(`${API_ENDPOINTS.anomalyStats}?days=7`, {
             method: 'GET',
-            headers: {
-                'Accept': 'application/json'
-            }
+            headers: { 'Accept': 'application/json' }
         });
 
         if (!response.ok) {
@@ -558,13 +498,8 @@ async function loadAnomalyStats() {
             throw new Error(errorData.detail || `HTTP ${response.status}`);
         }
 
-        const data = await response.json();
-        console.log('Anomaly stats:', data);
-
-        displayAnomalyStats(data);
-
+        displayAnomalyStats(await response.json());
     } catch (error) {
-        console.error('Stats error:', error);
         showAnomalyError('stats', `Hata: ${error.message}`);
     } finally {
         showAnomalyLoading('stats', false);
@@ -574,83 +509,86 @@ async function loadAnomalyStats() {
 
 function displayAnomalyStats(data) {
     const resultDiv = document.getElementById('stats-result');
-    resultDiv.classList.remove('hidden');
-
-    // Summary
     const summaryDiv = document.getElementById('stats-summary');
+    const tableContainer = document.getElementById('stats-table-container');
+    const summary = data.summary || {};
+    const severityDistribution = summary.severity_distribution || {};
+    const reviewCount = severityDistribution.info || 0;
+    const warningCount = severityDistribution.warning || 0;
+    const criticalCount = severityDistribution.critical || 0;
+    const alertCount = warningCount + criticalCount;
+
+    resultDiv.classList.remove('hidden');
     summaryDiv.innerHTML = `
         <div class="summary-item">
-            <div class="summary-label">Toplam Window</div>
-            <div class="summary-value">${data.summary.total_windows}</div>
+            <div class="summary-label">Pencere</div>
+            <div class="summary-value">${summary.total_windows || 0}</div>
         </div>
         <div class="summary-item">
-            <div class="summary-label">Toplam Ticket</div>
-            <div class="summary-value">${data.summary.total_tickets}</div>
+            <div class="summary-label">Ticket</div>
+            <div class="summary-value">${summary.total_tickets || 0}</div>
         </div>
         <div class="summary-item">
-            <div class="summary-label">Anomali Windows</div>
-            <div class="summary-value">${data.summary.anomalous_windows}</div>
+            <div class="summary-label">Review candidate</div>
+            <div class="summary-value review">${reviewCount}</div>
+        </div>
+        <div class="summary-item">
+            <div class="summary-label">Alert</div>
+            <div class="summary-value alert">${alertCount}</div>
         </div>
     `;
 
-    // Table of windows + drift scores
-    const tableContainer = document.getElementById('stats-table-container');
-    
-    if (data.windows.length === 0) {
-        tableContainer.innerHTML = '<p>Henüz window verisi yok.</p>';
+    if (!data.windows || data.windows.length === 0) {
+        tableContainer.innerHTML = '<div class="event-empty">Window verisi yok</div>';
         return;
     }
 
-    let tableHTML = `
+    tableContainer.innerHTML = `
         <div class="table-container">
             <table>
                 <thead>
                     <tr>
-                        <th>Window Başlangıç</th>
-                        <th>Ticket Sayısı</th>
-                        <th>Volume Z-Score</th>
+                        <th>Başlangıç</th>
+                        <th>Ticket</th>
+                        <th>Volume Z</th>
                         <th>Category Div</th>
-                        <th>Embedding Shift</th>
-                        <th>Combined Score</th>
+                        <th>Semantic Drift</th>
+                        <th>Score</th>
+                        <th>Durum</th>
                     </tr>
                 </thead>
                 <tbody>
-    `;
-
-    // Merge windows with drift_scores
-    data.windows.forEach((window, idx) => {
-        const drift = data.drift_scores[idx] || {};
-        const windowDate = new Date(window.window_start).toLocaleDateString('tr-TR');
-
-        tableHTML += `
-            <tr>
-                <td>${windowDate}</td>
-                <td>${window.total_tickets}</td>
-                <td>${(drift.volume_zscore || 0).toFixed(2)}</td>
-                <td>${(drift.category_divergence || 0).toFixed(3)}</td>
-                <td>${(drift.embedding_shift || 0).toFixed(3)}</td>
-                <td><strong>${(drift.combined_score || 0).toFixed(3)}</strong></td>
-            </tr>
-        `;
-    });
-
-    tableHTML += `
+                    ${data.windows.map((window, idx) => renderWindowRow(window, idx, data.drift_scores)).join('')}
                 </tbody>
             </table>
         </div>
     `;
-
-    tableContainer.innerHTML = tableHTML;
 }
 
-// ============================================
-// ANOMALY PANEL - EVENTS
-// ============================================
+function renderWindowRow(window, idx, driftScores) {
+    const drift = (driftScores && driftScores[idx]) || {};
+    const volumeZscore = Number(drift.volume_zscore ?? window.volume_zscore ?? 0);
+    const categoryDivergence = Number(drift.category_divergence ?? window.category_divergence ?? 0);
+    const semanticDrift = Number(drift.embedding_shift ?? drift.semantic_drift ?? window.semantic_drift ?? 0);
+    const combinedScore = Number(drift.combined_score ?? window.combined_score ?? 0);
+    const severity = window.severity || 'normal';
+    const meta = getSeverityMeta(severity);
+
+    return `
+        <tr>
+            <td>${formatDate(window.window_start)}</td>
+            <td>${window.total_tickets}</td>
+            <td>${volumeZscore.toFixed(2)}</td>
+            <td>${categoryDivergence.toFixed(3)}</td>
+            <td>${semanticDrift.toFixed(3)}</td>
+            <td><strong>${combinedScore.toFixed(3)}</strong></td>
+            <td><span class="status-chip ${meta.statusClass} severity-${severity}">${meta.shortLabel}</span></td>
+        </tr>
+    `;
+}
 
 async function loadAnomalyEvents() {
     const loadBtn = document.getElementById('load-events-btn');
-
-    // Show loading state
     showAnomalyLoading('events', true);
     hideAnomalyError('events');
     hideAnomalyResult('events');
@@ -659,9 +597,7 @@ async function loadAnomalyEvents() {
     try {
         const response = await fetch(`${API_ENDPOINTS.anomalyDetect}?min_severity=info`, {
             method: 'GET',
-            headers: {
-                'Accept': 'application/json'
-            }
+            headers: { 'Accept': 'application/json' }
         });
 
         if (!response.ok) {
@@ -669,13 +605,8 @@ async function loadAnomalyEvents() {
             throw new Error(errorData.detail || `HTTP ${response.status}`);
         }
 
-        const data = await response.json();
-        console.log('Anomaly events:', data);
-
-        displayAnomalyEvents(data);
-
+        displayAnomalyEvents(await response.json());
     } catch (error) {
-        console.error('Events error:', error);
         showAnomalyError('events', `Hata: ${error.message}`);
     } finally {
         showAnomalyLoading('events', false);
@@ -685,81 +616,136 @@ async function loadAnomalyEvents() {
 
 function displayAnomalyEvents(data) {
     const resultDiv = document.getElementById('events-result');
-    resultDiv.classList.remove('hidden');
-
-    // Summary
     const summaryDiv = document.getElementById('events-summary');
-    
-    const sevDist = data.severity_distribution || {};
+    const eventsList = document.getElementById('events-list');
+    const events = data.events || [];
+    const reviewEvents = events.filter(event => event.severity === 'info');
+    const alertEvents = events.filter(event => event.severity === 'warning' || event.severity === 'critical');
+    const criticalCount = alertEvents.filter(event => event.severity === 'critical').length;
+    const warningCount = alertEvents.filter(event => event.severity === 'warning').length;
+
+    resultDiv.classList.remove('hidden');
     summaryDiv.innerHTML = `
         <div class="summary-item">
-            <div class="summary-label">Toplam Windows</div>
-            <div class="summary-value">${data.total_windows}</div>
+            <div class="summary-label">Toplam pencere</div>
+            <div class="summary-value">${data.total_windows || 0}</div>
         </div>
         <div class="summary-item">
-            <div class="summary-label">Anomalous</div>
-            <div class="summary-value">${data.anomalous_windows}</div>
+            <div class="summary-label">Review candidate</div>
+            <div class="summary-value review">${reviewEvents.length}</div>
         </div>
         <div class="summary-item">
-            <div class="summary-label">Info</div>
-            <div class="summary-value" style="color: #4299e1;">${sevDist.info || 0}</div>
+            <div class="summary-label">Warning alert</div>
+            <div class="summary-value warning">${warningCount}</div>
         </div>
         <div class="summary-item">
-            <div class="summary-label">Warning</div>
-            <div class="summary-value" style="color: #ed8936;">${sevDist.warning || 0}</div>
-        </div>
-        <div class="summary-item">
-            <div class="summary-label">Critical</div>
-            <div class="summary-value" style="color: #e53e3e;">${sevDist.critical || 0}</div>
+            <div class="summary-label">Critical alert</div>
+            <div class="summary-value critical">${criticalCount}</div>
         </div>
     `;
 
-    // Events list
-    const eventsList = document.getElementById('events-list');
-    
-    if (data.events.length === 0) {
-        eventsList.innerHTML = '<p>Anomali event bulunmadı.</p>';
+    if (events.length === 0) {
+        eventsList.innerHTML = '<div class="event-empty">Olay bulunmadı</div>';
         return;
     }
 
-    eventsList.innerHTML = '';
-
-    data.events.forEach(event => {
-        const eventItem = document.createElement('div');
-        eventItem.className = `event-item severity-${event.severity}`;
-
-        const windowStart = new Date(event.window_start).toLocaleDateString('tr-TR');
-        const windowEnd = new Date(event.window_end).toLocaleDateString('tr-TR');
-
-        const reasonsHTML = event.reasons.map(r => `<li>${r}</li>`).join('');
-
-        eventItem.innerHTML = `
-            <div class="event-header">
-                <span class="event-time">${windowStart} - ${windowEnd}</span>
-                <span class="severity-badge severity-${event.severity}">${event.severity}</span>
-            </div>
-            <div class="event-score">Combined Score: ${event.score.toFixed(3)}</div>
-            <ul class="event-reasons">
-                ${reasonsHTML}
-            </ul>
-        `;
-
-        eventsList.appendChild(eventItem);
-    });
+    eventsList.innerHTML = `
+        <div class="event-columns">
+            ${renderEventColumn('Alerts', alertEvents)}
+            ${renderEventColumn('Review candidates', reviewEvents)}
+        </div>
+    `;
 }
 
-// ============================================
-// ANOMALY UTILITY FUNCTIONS
-// ============================================
+function renderEventColumn(title, events) {
+    return `
+        <section class="event-column">
+            <div class="event-column-header">
+                <span>${title}</span>
+                <span class="event-count">${events.length}</span>
+            </div>
+            <div class="event-stack">
+                ${events.length ? events.map(renderEventCard).join('') : '<div class="event-empty">Kayıt yok</div>'}
+            </div>
+        </section>
+    `;
+}
+
+function renderEventCard(event) {
+    const severity = event.severity || 'info';
+    const meta = getSeverityMeta(severity);
+    const reasons = event.reasons || [];
+
+    return `
+        <article class="event-item ${meta.statusClass} severity-${severity}">
+            <div class="event-header">
+                <span class="event-time">${formatDateRange(event.window_start, event.window_end)}</span>
+                <span class="severity-badge severity-${severity}">${meta.label}</span>
+            </div>
+            <div class="event-score">score ${Number(event.score || 0).toFixed(3)}</div>
+            <ul class="event-reasons">
+                ${reasons.map(reason => `<li>${escapeHtml(reason)}</li>`).join('')}
+            </ul>
+        </article>
+    `;
+}
+
+function getSeverityMeta(severity) {
+    if (severity === 'critical') {
+        return {
+            label: 'Critical alert',
+            shortLabel: 'Alert',
+            statusClass: 'status-alert'
+        };
+    }
+
+    if (severity === 'warning') {
+        return {
+            label: 'Alert',
+            shortLabel: 'Alert',
+            statusClass: 'status-alert'
+        };
+    }
+
+    if (severity === 'info') {
+        return {
+            label: 'Review candidate',
+            shortLabel: 'Review',
+            statusClass: 'status-review'
+        };
+    }
+
+    return {
+        label: 'Normal',
+        shortLabel: 'Normal',
+        statusClass: 'status-normal'
+    };
+}
+
+function formatDate(value) {
+    if (!value) {
+        return '-';
+    }
+    return new Date(value).toLocaleDateString('tr-TR');
+}
+
+function formatDateRange(startValue, endValue) {
+    if (!startValue) {
+        return '-';
+    }
+
+    const start = new Date(startValue);
+    const end = endValue ? new Date(new Date(endValue).getTime() - 1) : start;
+    const startText = start.toLocaleDateString('tr-TR');
+    const endText = end.toLocaleDateString('tr-TR');
+
+    return startText === endText ? startText : `${startText} - ${endText}`;
+}
 
 function showAnomalyLoading(section, show) {
     const loadingDiv = document.getElementById(`${section}-loading`);
     if (loadingDiv) {
-        if (show) {
-            loadingDiv.classList.remove('hidden');
-        } else {
-            loadingDiv.classList.add('hidden');
-        }
+        loadingDiv.classList.toggle('hidden', !show);
     }
 }
 
@@ -785,43 +771,26 @@ function hideAnomalyResult(section) {
     }
 }
 
-// ============================================
-// INITIALIZATION
-// ============================================
-
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('🚀 BT Destek Asistanı - Chat Interface initialized');
-    console.log('API Base URL:', API_BASE_URL);
-
-    // Initialize tabs
     initTabs();
-
-    // Initialize session
     getOrCreateSessionId();
-
-    // Render initial empty chat
     renderChatMessages();
 
-    // Chat submit button
     const chatSubmitBtn = document.getElementById('chat-submit-btn');
-    chatSubmitBtn.addEventListener('click', submitChatQuery);
-
-    // Enter key in query input (Shift+Enter for new line)
     const queryInput = document.getElementById('query-input');
-    queryInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
+    const loadQualityBtn = document.getElementById('load-quality-btn');
+    const loadStatsBtn = document.getElementById('load-stats-btn');
+    const loadEventsBtn = document.getElementById('load-events-btn');
+
+    chatSubmitBtn.addEventListener('click', submitChatQuery);
+    queryInput.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
             submitChatQuery();
         }
     });
 
-    // Anomaly buttons
-    const loadStatsBtn = document.getElementById('load-stats-btn');
+    loadQualityBtn.addEventListener('click', loadAnomalyQuality);
     loadStatsBtn.addEventListener('click', loadAnomalyStats);
-
-    const loadEventsBtn = document.getElementById('load-events-btn');
     loadEventsBtn.addEventListener('click', loadAnomalyEvents);
-
-    console.log('✅ Event listeners registered');
-    console.log('💬 Chat interface ready - Start typing your question!');
 });

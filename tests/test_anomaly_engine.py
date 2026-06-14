@@ -209,18 +209,18 @@ def test_determine_severity_normal():
 def test_determine_severity_info():
     """Test severity determination for info level."""
     assert determine_severity(0.3) == "info"
-    assert determine_severity(0.5) == "info"
+    assert determine_severity(0.54) == "info"
 
 
 def test_determine_severity_warning():
     """Test severity determination for warning level."""
-    assert determine_severity(0.6) == "warning"
-    assert determine_severity(0.75) == "warning"
+    assert determine_severity(0.55) == "warning"
+    assert determine_severity(0.64) == "warning"
 
 
 def test_determine_severity_critical():
     """Test severity determination for critical level."""
-    assert determine_severity(0.8) == "critical"
+    assert determine_severity(0.65) == "critical"
     assert determine_severity(0.95) == "critical"
 
 
@@ -346,11 +346,12 @@ def test_analyze_ticket_stream_semantic_drift():
     """Test detection of semantic drift using simple 2D embeddings."""
     base_date = datetime(2024, 12, 1)
     tickets = []
+    rng = np.random.default_rng(42)
     
-    # Days 1-5: Embeddings around origin [0, 0]
+    # Days 1-5: Embeddings around one stable semantic direction.
     for day in range(5):
         for i in range(10):
-            embedding = np.array([0.0, 0.0]) + np.random.randn(2) * 0.1
+            embedding = np.array([1.0, 0.0]) + rng.normal(0.0, 0.01, 2)
             tickets.append(AnomalyTicket(
                 ticket_id=f"t{day}_{i}",
                 created_at=base_date + timedelta(days=day, hours=i),
@@ -358,9 +359,9 @@ def test_analyze_ticket_stream_semantic_drift():
                 embedding=embedding,
             ))
     
-    # Day 6: Embeddings around [1, 1] (significant drift!)
+    # Day 6: Embeddings around an orthogonal semantic direction.
     for i in range(10):
-        embedding = np.array([1.0, 1.0]) + np.random.randn(2) * 0.1
+        embedding = np.array([0.0, 1.0]) + rng.normal(0.0, 0.01, 2)
         tickets.append(AnomalyTicket(
             ticket_id=f"t_drift_{i}",
             created_at=base_date + timedelta(days=5, hours=i),

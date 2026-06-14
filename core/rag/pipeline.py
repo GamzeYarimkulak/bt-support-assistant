@@ -364,6 +364,228 @@ def generate_answer_with_stub(question: str, docs: List[Dict[str, Any]], languag
         return _build_advisory_answer_en(question, docs)
 
 
+def _doc_identifier(doc: Dict[str, Any]) -> str:
+    """Return a readable source identifier across ticket and KB documents."""
+    for field in ("ticket_id", "doc_id", "id", "document_id"):
+        value = doc.get(field)
+        if value:
+            return str(value)
+    return "Bilinmeyen"
+
+
+def _doc_title(doc: Dict[str, Any]) -> str:
+    """Return the best available issue/title field for a retrieved document."""
+    for field in ("short_description", "title", "subject", "category"):
+        value = str(doc.get(field, "") or "").strip()
+        if value:
+            return value
+
+    text = str(doc.get("text", "") or doc.get("description", "") or "").strip()
+    return text[:120]
+
+
+def _doc_solution_text(doc: Dict[str, Any]) -> str:
+    """Return usable answer context even when a KB chunk has no resolution field."""
+    for field in ("resolution", "answer", "solution", "content", "text", "description"):
+        value = str(doc.get(field, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _source_label_tr(doc_type: str) -> str:
+    normalized = str(doc_type or "").casefold()
+    if normalized in {"kb", "document", "pdf"}:
+        return "Bilgi dokümanı"
+    return "Ticket"
+
+
+def _source_label_en(doc_type: str) -> str:
+    normalized = str(doc_type or "").casefold()
+    if normalized in {"kb", "document", "pdf"}:
+        return "Knowledge document"
+    return "Ticket"
+
+
+def _combined_doc_text(question: str, docs: List[Dict[str, Any]]) -> str:
+    pieces = [question]
+    for doc in docs[:3]:
+        pieces.extend(
+            [
+                str(doc.get("category", "") or ""),
+                str(doc.get("subcategory", "") or ""),
+                _doc_title(doc),
+                _doc_solution_text(doc),
+            ]
+        )
+    return " ".join(piece.casefold() for piece in pieces if piece)
+
+
+def _infer_support_scenario(question: str, docs: List[Dict[str, Any]]) -> str:
+    text = _combined_doc_text(question, docs)
+
+    if any(term in text for term in ("vpn", "forticlient", "remote access", "uzaktan erişim")):
+        return "vpn"
+    if any(term in text for term in ("mail", "e-posta", "outlook", "exchange", "posta kutusu", "kota")):
+        return "mail"
+    if any(term in text for term in ("mfa", "authenticator", "token", "şifre", "parola", "sso", "hesap kilit")):
+        return "identity"
+    if any(term in text for term in ("yazıcı", "printer", "çıktı", "toner", "tarama")):
+        return "printer"
+    if any(term in text for term in ("teams", "mikrofon", "kamera", "toplantı", "ses")):
+        return "teams"
+    return "generic"
+
+
+def _action_steps_tr(question: str, docs: List[Dict[str, Any]]) -> List[str]:
+    scenario = _infer_support_scenario(question, docs)
+
+    if scenario == "vpn":
+        return [
+            "İnternet bağlantısını ve VPN dışında web erişiminin çalışıp çalışmadığını kontrol edin.",
+            "FortiClient/VPN istemcisinde kullanıcı adı, parola, MFA bildirimi ve hata kodunu kontrol edin.",
+            "Şirket içi kaynaklara erişim yoksa VPN profilini/gateway bilgisini yenileyip yeniden bağlanmayı deneyin.",
+            "Sorun sürerse saat, hata kodu, ekran görüntüsü ve etkilenen kullanıcı bilgisini BT ekibine iletin.",
+        ]
+    if scenario == "mail":
+        return [
+            "Outlook Web veya farklı bir cihazdan mail gönderimini deneyerek sorunun istemci mi servis mi olduğunu ayırın.",
+            "Posta kutusu kotasını ve ek boyutu limitlerini kontrol edin; kota doluysa eski/iri iletileri arşivleyin.",
+            "Exchange bağlantısı, mail flow ve varsa NDR/hata kodu bilgisini not edin.",
+            "Sorun devam ederse BT ekibinden kullanıcı mailbox, connector ve servis sağlığı kontrollerini istemek gerekir.",
+        ]
+    if scenario == "identity":
+        return [
+            "Parola süresi, hesap kilidi ve MFA cihaz kaydı durumunu kontrol edin.",
+            "Self servis parola sıfırlama veya kurum kimlik portalı üzerinden oturumu yenilemeyi deneyin.",
+            "Authenticator saat senkronu, push bildirimi ve alternatif doğrulama yöntemlerini kontrol edin.",
+            "Şüpheli MFA isteği veya beklenmeyen oturum varsa parolayı değiştirip BT/SOC ekibine bildirin.",
+        ]
+    if scenario == "printer":
+        return [
+            "Yazıcının açık, ağda erişilebilir ve doğru kuyruk üzerinden seçili olduğunu kontrol edin.",
+            "Yazdırma kuyruğunu temizleyip test sayfası göndermeyi deneyin.",
+            "Sürücü, toner/kağıt durumu ve kullanıcı yetkisini kontrol edin.",
+            "Sorun sürerse yazıcı adı, hata mesajı ve etkilenen kullanıcıları BT ekibine iletin.",
+        ]
+    if scenario == "teams":
+        return [
+            "Teams web/masaüstü ayrımı yaparak sorunun uygulama mı cihaz mı olduğunu kontrol edin.",
+            "Mikrofon, kamera ve hoparlör aygıt seçimlerini doğrulayın.",
+            "Oturumu kapatıp açın, Teams önbelleğini temizleyin ve test toplantısı yapın.",
+            "Sorun devam ederse toplantı zamanı, cihaz modeli ve hata ekranını BT ekibine iletin.",
+        ]
+
+    return [
+        "Hata mesajı, etkilenen uygulama, cihaz ve sorunun başladığı zamanı not edin.",
+        "Aynı işlemi farklı tarayıcı/cihaz/ağ üzerinden deneyerek kapsamı daraltın.",
+        "Benzer geçmiş kayıtların çözüm adımlarını güvenli olanlardan başlayarak uygulayın.",
+        "İş kesintisi devam ederse bulgularla birlikte BT destek ekibine eskale edin.",
+    ]
+
+
+def _action_steps_en(question: str, docs: List[Dict[str, Any]]) -> List[str]:
+    scenario = _infer_support_scenario(question, docs)
+
+    if scenario == "vpn":
+        return [
+            "Check whether general internet access works outside the VPN.",
+            "Verify VPN username, password, MFA prompt, client profile, and any error code.",
+            "Reconnect after refreshing the VPN profile or gateway settings if internal resources are unreachable.",
+            "If it continues, send the timestamp, error code, screenshot, and affected user details to IT.",
+        ]
+    if scenario == "mail":
+        return [
+            "Try sending from Outlook Web or another device to separate client-side and service-side issues.",
+            "Check mailbox quota and attachment size limits; archive or remove large messages if needed.",
+            "Record Exchange connectivity, mail-flow, and NDR/error-code details.",
+            "If it continues, ask IT to check the mailbox, connector, and service health.",
+        ]
+    if scenario == "identity":
+        return [
+            "Check password expiry, account lockout, and MFA device registration.",
+            "Retry through the self-service password or identity portal.",
+            "Verify authenticator time sync, push notifications, and alternate verification methods.",
+            "For suspicious MFA prompts, change the password and notify IT/SOC.",
+        ]
+    return [
+        "Collect the exact error message, application/device, and start time.",
+        "Try the same action from another browser, device, or network to narrow the scope.",
+        "Apply the safest matching steps from similar historical tickets first.",
+        "Escalate to IT support with the collected evidence if the interruption continues.",
+    ]
+
+
+def _message_content(message: Dict[str, Any]) -> str:
+    return str(message.get("content") or message.get("text") or "").strip()
+
+
+def _is_follow_up_question(question: str) -> bool:
+    normalized = question.casefold()
+    words = normalized.split()
+    direct_follow_up_markers = (
+        "olmadi",
+        "olmadı",
+        "devam",
+        "bunlar",
+        "bunu",
+        "nereden",
+        "nerde",
+        "nasil",
+        "nasıl",
+        "adim",
+        "adım",
+        "soyledigin",
+        "söylediğin",
+        "uyguladim",
+        "uyguladım",
+        "sonra ne",
+    )
+    standalone_it_terms = (
+        "vpn",
+        "mail",
+        "exchange",
+        "outlook",
+        "teams",
+        "mfa",
+        "sifre",
+        "şifre",
+        "parola",
+        "yazici",
+        "yazıcı",
+        "printer",
+        "internet",
+        "wifi",
+    )
+
+    if any(marker in normalized for marker in direct_follow_up_markers):
+        return True
+
+    return len(words) <= 5 and not any(term in normalized for term in standalone_it_terms)
+
+def _build_contextual_retrieval_query(
+    question: str,
+    conversation_history: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Use the previous user issue for short follow-up questions without changing the visible answer."""
+    if not conversation_history or not _is_follow_up_question(question):
+        return question
+
+    previous_user_messages = [
+        _message_content(message)
+        for message in conversation_history
+        if message.get("role") == "user" and _message_content(message)
+    ]
+    if not previous_user_messages:
+        return question
+
+    previous_issue = previous_user_messages[-1]
+    if len(previous_issue) > 240:
+        previous_issue = previous_issue[:240]
+
+    return f"{previous_issue}\nTakip sorusu: {question}"
+
+
 def _build_advisory_answer_tr(question: str, docs: List[Dict[str, Any]]) -> str:
     """
     Build Turkish advisory-style answer from past ticket examples.
@@ -378,23 +600,31 @@ def _build_advisory_answer_tr(question: str, docs: List[Dict[str, Any]]) -> str:
     """
     answer_parts = [
         f"Sorunuz: {question}\n",
-        "\nBenzer durumlarda BT ekibinin uyguladığı örnek çözümler:\n"
+        "\nÖnerilen ilk kontroller:\n"
     ]
+
+    for index, step in enumerate(_action_steps_tr(question, docs), 1):
+        answer_parts.append(f"{index}. {step}\n")
+
+    answer_parts.append("\nBenzer durumlarda BT ekibinin uyguladığı örnek çözümler:\n")
     
-    # Show top 3 examples
-    num_examples = min(3, len(docs))
-    for i in range(num_examples):
-        doc = docs[i]
-        ticket_id = doc.get("ticket_id", "Bilinmeyen")
+    # Show top 3 usable examples. Ticket documents use resolution; KB chunks use text/content.
+    examples_rendered = 0
+    for doc in docs:
+        if examples_rendered >= 3:
+            break
+
+        ticket_id = _doc_identifier(doc)
         doc_type = doc.get("doc_type", "itsm_ticket")
-        short_desc = doc.get("short_description", "")
-        resolution = doc.get("resolution", "")
+        short_desc = _doc_title(doc)
+        resolution = _doc_solution_text(doc)
         
         if short_desc and resolution:
+            examples_rendered += 1
             # Header
-            source_label = "Doküman" if doc_type == "document" else "Ticket"
+            source_label = _source_label_tr(doc_type)
             answer_parts.append(f"\n{'='*70}")
-            answer_parts.append(f"\n📖 Örnek {i+1} ({source_label}: {ticket_id})")
+            answer_parts.append(f"\n📖 Örnek {examples_rendered} ({source_label}: {ticket_id})")
             answer_parts.append(f"\n{'='*70}")
             answer_parts.append(f"\n**Durum:** {short_desc}\n")
             
@@ -416,7 +646,7 @@ def _build_advisory_answer_tr(question: str, docs: List[Dict[str, Any]]) -> str:
         "\n✓ BT destek ekibinden bu çözümleri uygulamalarını talep edebilirsiniz."
     )
     
-    if len(docs) > num_examples:
+    if len(docs) > examples_rendered:
         answer_parts.append(
             f"\n\n(Toplam {len(docs)} benzer durum bulundu)"
         )
@@ -424,7 +654,7 @@ def _build_advisory_answer_tr(question: str, docs: List[Dict[str, Any]]) -> str:
     logger.debug("advisory_answer_generated_tr", 
                 question=question[:50],
                 num_docs=len(docs),
-                num_examples=num_examples)
+                num_examples=examples_rendered)
     
     return "".join(answer_parts)
 
@@ -496,23 +726,31 @@ def _build_advisory_answer_en(question: str, docs: List[Dict[str, Any]]) -> str:
     """
     answer_parts = [
         f"Your question: {question}\n",
-        "\nExample solutions applied by the IT team in similar cases:\n"
+        "\nRecommended first checks:\n"
     ]
+
+    for index, step in enumerate(_action_steps_en(question, docs), 1):
+        answer_parts.append(f"{index}. {step}\n")
+
+    answer_parts.append("\nExample solutions applied by the IT team in similar cases:\n")
     
-    # Show top 3 examples
-    num_examples = min(3, len(docs))
-    for i in range(num_examples):
-        doc = docs[i]
-        ticket_id = doc.get("ticket_id", "Unknown")
+    # Show top 3 usable examples. Ticket documents use resolution; KB chunks use text/content.
+    examples_rendered = 0
+    for doc in docs:
+        if examples_rendered >= 3:
+            break
+
+        ticket_id = _doc_identifier(doc)
         doc_type = doc.get("doc_type", "itsm_ticket")
-        short_desc = doc.get("short_description", "")
-        resolution = doc.get("resolution", "")
+        short_desc = _doc_title(doc)
+        resolution = _doc_solution_text(doc)
         
         if short_desc and resolution:
+            examples_rendered += 1
             # Header
-            source_label = "Document" if doc_type == "document" else "Ticket"
+            source_label = _source_label_en(doc_type)
             answer_parts.append(f"\n{'='*70}")
-            answer_parts.append(f"\n📖 Example {i+1} ({source_label}: {ticket_id})")
+            answer_parts.append(f"\n📖 Example {examples_rendered} ({source_label}: {ticket_id})")
             answer_parts.append(f"\n{'='*70}")
             answer_parts.append(f"\n**Issue:** {short_desc}\n")
             
@@ -534,7 +772,7 @@ def _build_advisory_answer_en(question: str, docs: List[Dict[str, Any]]) -> str:
         "\n✓ Request the IT support team to apply these solutions."
     )
     
-    if len(docs) > num_examples:
+    if len(docs) > examples_rendered:
         answer_parts.append(
             f"\n\n({len(docs)} similar cases found in total)"
         )
@@ -542,7 +780,7 @@ def _build_advisory_answer_en(question: str, docs: List[Dict[str, Any]]) -> str:
     logger.debug("advisory_answer_generated_en", 
                 question=question[:50],
                 num_docs=len(docs),
-                num_examples=num_examples)
+                num_examples=examples_rendered)
     
     return "".join(answer_parts)
 
@@ -597,6 +835,19 @@ class RAGPipeline:
         self.llm_model_name = llm_model_name
         self.llm_temperature = llm_temperature
         self.llm_max_tokens = llm_max_tokens
+
+        if self.use_real_llm and not OPENAI_AVAILABLE:
+            logger.warning(
+                "real_llm_disabled_openai_package_missing",
+                message="USE_REAL_LLM is true, but the openai package is not installed. Falling back to stub answers.",
+            )
+            self.use_real_llm = False
+        elif self.use_real_llm and not self.openai_api_key:
+            logger.warning(
+                "real_llm_disabled_api_key_missing",
+                message="USE_REAL_LLM is true, but OPENAI_API_KEY is missing. Falling back to stub answers.",
+            )
+            self.use_real_llm = False
         
         # IT relevance checker for filtering non-IT queries
         self.it_relevance_checker = ITRelevanceChecker()
@@ -604,8 +855,8 @@ class RAGPipeline:
         logger.info("rag_pipeline_initialized",
                    max_context_length=max_context_length,
                    confidence_threshold=confidence_threshold,
-                   use_real_llm=use_real_llm,
-                   llm_model=llm_model_name if use_real_llm else "stub")
+                   use_real_llm=self.use_real_llm,
+                   llm_model=llm_model_name if self.use_real_llm else "stub")
     
     def answer(
         self,
@@ -748,10 +999,12 @@ class RAGPipeline:
             )
         
         # Step 1: Retrieve relevant documents
-        retrieved_docs = self.retriever.search(question, top_k=top_k)
+        retrieval_question = _build_contextual_retrieval_query(question, conversation_history)
+        retrieved_docs = self.retriever.search(retrieval_question, top_k=top_k)
         
         # Collect debug info from retrieval
         debug_info = {}
+        debug_info["used_conversation_context"] = retrieval_question != question
         if retrieved_docs:
             # Get alpha_used from first result (all should have same alpha)
             first_doc = retrieved_docs[0]
@@ -774,6 +1027,7 @@ class RAGPipeline:
         logger.debug("retrieval_completed", 
                     num_docs=len(retrieved_docs),
                     question=question[:50],
+                    retrieval_question=retrieval_question[:120],
                     debug_info=debug_info)
         
         # Step 2: Check if we have any documents

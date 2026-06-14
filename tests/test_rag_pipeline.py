@@ -77,7 +77,7 @@ class TestRAGPipelineNoAnswer:
     
     def test_no_documents_retrieved(self, empty_pipeline):
         """Test that pipeline returns no-answer when no documents found."""
-        result = empty_pipeline.answer("Nonexistent query about nothing")
+        result = empty_pipeline.answer("VPN certificate renewal issue")
         
         assert isinstance(result, RAGResult)
         assert result.has_answer is False

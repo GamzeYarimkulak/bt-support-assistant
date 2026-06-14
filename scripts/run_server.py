@@ -5,6 +5,11 @@ Script to run the FastAPI server.
 import sys
 import os
 
+# Avoid unnecessary HuggingFace network checks during local demos.
+# The embedding model must already be available in the local cache.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -28,6 +33,8 @@ def main():
     print(f"Environment: {settings.environment}")
     print(f"Host: {settings.api_host}:{settings.api_port}")
     print(f"Debug: {settings.debug}")
+    print(f"Web UI: http://127.0.0.1:{settings.api_port}/")
+    print(f"API docs: http://127.0.0.1:{settings.api_port}/docs")
     
     uvicorn.run(
         "app.main:app",

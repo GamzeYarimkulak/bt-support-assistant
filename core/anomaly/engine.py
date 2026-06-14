@@ -21,6 +21,12 @@ import warnings
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
 
+SEMANTIC_SCORE_SCALE = 0.25
+SEMANTIC_REASON_THRESHOLD = 0.12
+SEVERITY_INFO_THRESHOLD = 0.30
+SEVERITY_WARNING_THRESHOLD = 0.55
+SEVERITY_CRITICAL_THRESHOLD = 0.65
+
 
 # ============================================
 # DATA MODELS
@@ -265,8 +271,8 @@ def compute_semantic_drift(
         (0 = identical, 1 = orthogonal/completely different)
     
     Interpretation:
-        distance > 0.3: Significant drift
-        distance > 0.2: Moderate drift
+        distance > 0.25: Significant drift
+        distance > 0.15: Moderate drift
         distance > 0.1: Slight drift
         distance <= 0.1: Normal variation
     """
@@ -416,6 +422,7 @@ def combine_scores(
     w_volume: float = 0.3,
     w_category: float = 0.3,
     w_semantic: float = 0.4,
+    semantic_score_scale: float = SEMANTIC_SCORE_SCALE,
 ) -> float:
     """
     Combine individual anomaly scores into a single score.
@@ -427,6 +434,7 @@ def combine_scores(
         w_volume: Weight for volume component
         w_category: Weight for category component
         w_semantic: Weight for semantic component
+        semantic_score_scale: Semantic drift value that maps to a full semantic score
     
     Returns:
         Combined score in [0, 1]
@@ -435,7 +443,7 @@ def combine_scores(
     Normalization:
         - Volume: |z| <= 3 maps to [0, 1], clamped above
         - Category: divergence [0, 1] (already normalized)
-        - Semantic: drift [0, 0.5] maps to [0, 1], clamped above
+        - Semantic: drift [0, 0.25] maps to [0, 1], clamped above
     """
     scores = []
     weights = []
@@ -455,8 +463,9 @@ def combine_scores(
     
     # 3. Semantic component
     if semantic_drift is not None:
-        # Normalize [0, 0.5] to [0, 1], clamp at 0.5
-        semantic_score = min(semantic_drift / 0.5, 1.0)
+        # Sentence embedding cosine distances around 0.15-0.25 can already
+        # indicate meaningful topic drift in short IT support windows.
+        semantic_score = min(semantic_drift / semantic_score_scale, 1.0)
         scores.append(semantic_score)
         weights.append(w_semantic)
     
@@ -478,9 +487,9 @@ def combine_scores(
 
 def determine_severity(
     combined_score: float,
-    threshold_info: float = 0.3,
-    threshold_warning: float = 0.6,
-    threshold_critical: float = 0.8,
+    threshold_info: float = SEVERITY_INFO_THRESHOLD,
+    threshold_warning: float = SEVERITY_WARNING_THRESHOLD,
+    threshold_critical: float = SEVERITY_CRITICAL_THRESHOLD,
 ) -> str:
     """
     Determine severity level based on combined score.
@@ -516,7 +525,7 @@ def generate_reasons(
     semantic_drift: Optional[float],
     volume_threshold: float = 1.5,
     category_threshold: float = 0.3,
-    semantic_threshold: float = 0.15,
+    semantic_threshold: float = SEMANTIC_REASON_THRESHOLD,
 ) -> List[str]:
     """
     Generate human-readable reasons for detected anomalies.

@@ -15,6 +15,8 @@ from typing import List, Dict, Any
 from datetime import datetime, timedelta
 import structlog
 import os
+import json
+from pathlib import Path
 
 from app.config import settings
 from core.anomaly.engine import (
@@ -24,7 +26,7 @@ from core.anomaly.engine import (
     analyze_ticket_stream,
 )
 from data_pipeline.ingestion import load_itsm_tickets_from_csv
-from data_pipeline.anonymize import DataAnonymizer
+from data_pipeline.anonymize import anonymize_tickets as anonymize_itsm_tickets
 from data_pipeline.build_indexes import IndexBuilder
 import pandas as pd
 
@@ -34,6 +36,8 @@ logger = structlog.get_logger()
 
 # Global cache for anomaly results (simple in-memory cache)
 _anomaly_cache: Dict[str, Any] = {}
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_QUALITY_REPORT = PROJECT_ROOT / "data" / "evaluation" / "anomaly" / "anomaly_validation_metrics.json"
 
 
 # ============================================
@@ -75,9 +79,88 @@ class AnomalyDetectResponse(BaseModel):
     severity_distribution: Dict[str, int]
 
 
+class AnomalyQualityResponse(BaseModel):
+    """Validation quality summary for the anomaly detector."""
+    generated_at: str | None = None
+    metric_scope: str
+    semantic_drift_evaluable: bool
+    event_level: Dict[str, Any]
+    day_level: Dict[str, Any]
+    severity: Dict[str, Any]
+    counts: Dict[str, Any]
+    source: Dict[str, Any]
+
+
 # ============================================
 # HELPER FUNCTIONS
 # ============================================
+
+def _rate(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _load_anomaly_quality_report(path: Path = DEFAULT_QUALITY_REPORT) -> Dict[str, Any]:
+    """Load the latest independent validation metrics as a compact UI summary."""
+    if not path.exists():
+        raise FileNotFoundError(f"Anomaly validation metrics not found: {path}")
+
+    with path.open("r", encoding="utf-8") as handle:
+        report = json.load(handle)
+
+    metrics = report.get("metrics") or {}
+    day_metrics = metrics.get("day_level_metrics") or {}
+    severity_calibration = metrics.get("severity_calibration") or {}
+    best_thresholds = severity_calibration.get("best_thresholds") or {}
+    inputs = report.get("inputs") or {}
+
+    return {
+        "generated_at": report.get("generated_at"),
+        "metric_scope": "independent_synthetic_validation_with_negative_days",
+        "semantic_drift_evaluable": bool(report.get("semantic_drift_evaluable")),
+        "event_level": {
+            "precision": _rate(metrics.get("precision")),
+            "recall": _rate(metrics.get("recall")),
+            "f1": _rate(metrics.get("f1")),
+        },
+        "day_level": {
+            "precision": _rate(day_metrics.get("precision")),
+            "recall": _rate(day_metrics.get("recall")),
+            "f1": _rate(day_metrics.get("f1")),
+            "specificity": _rate(day_metrics.get("specificity")),
+            "accuracy": _rate(day_metrics.get("accuracy")),
+            "balanced_accuracy": _rate(day_metrics.get("balanced_accuracy")),
+            "score_threshold": _rate(day_metrics.get("score_threshold")),
+        },
+        "severity": {
+            "exact_match_rate": _rate(metrics.get("severity_exact_match_rate")),
+            "positive_day_exact_match_rate": _rate(
+                day_metrics.get("severity_exact_match_rate_on_positive_days")
+            ),
+            "warning_threshold": _rate(best_thresholds.get("warning_threshold")),
+            "critical_threshold": _rate(best_thresholds.get("critical_threshold")),
+        },
+        "counts": {
+            "ground_truth_events": int(metrics.get("ground_truth_event_count") or 0),
+            "detected_events": int(metrics.get("detected_event_count") or 0),
+            "matched_events": int(metrics.get("matched_event_count") or 0),
+            "false_positive_candidates": int(metrics.get("false_positive_candidate_count") or 0),
+            "positive_days": int(day_metrics.get("positive_day_count") or 0),
+            "negative_days": int(day_metrics.get("negative_day_count") or 0),
+            "true_positive_days": int(day_metrics.get("true_positive_days") or 0),
+            "false_positive_days": int(day_metrics.get("false_positive_days") or 0),
+            "false_negative_days": int(day_metrics.get("false_negative_days") or 0),
+            "true_negative_days": int(day_metrics.get("true_negative_days") or 0),
+        },
+        "source": {
+            "metrics_file": str(path.relative_to(PROJECT_ROOT)),
+            "ground_truth": inputs.get("ground_truth"),
+            "tickets": inputs.get("processed_tickets"),
+            "day_labels": inputs.get("day_labels"),
+        },
+    }
 
 def _load_chat_logs_for_anomaly(chat_logs_path: str) -> List[AnomalyTicket]:
     """
@@ -173,8 +256,7 @@ def _load_tickets_for_anomaly_analysis(
     
     # Anonymize if requested
     if anonymize:
-        anonymizer = DataAnonymizer(anonymization_enabled=True)
-        raw_tickets = anonymizer.anonymize_tickets(raw_tickets)
+        raw_tickets = anonymize_itsm_tickets(raw_tickets)
     
     # Load embedding model
     try:
@@ -493,4 +575,24 @@ async def detect_anomalies(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to detect anomalies: {str(e)}"
+        )
+
+
+@router.get("/quality", response_model=AnomalyQualityResponse)
+async def get_anomaly_quality() -> AnomalyQualityResponse:
+    """
+    Return the latest independent validation metrics for the anomaly engine.
+
+    This endpoint is read-only and does not run the detector. It summarizes
+    data/evaluation/anomaly/anomaly_validation_metrics.json for the frontend.
+    """
+    try:
+        return AnomalyQualityResponse(**_load_anomaly_quality_report())
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error("anomaly_quality_failed", error=str(exc), exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to load anomaly quality metrics: {str(exc)}",
         )
